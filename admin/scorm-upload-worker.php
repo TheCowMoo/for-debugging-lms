@@ -36,6 +36,7 @@ if (!$jobId || !$tmpPath || !$pkgId) {
 // Bootstrap (no HTTP session needed for CLI)
 define('WORKER_CLI', true);
 require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../scorm-api/scorm-normalize.php';
 
 set_time_limit(0);
 ini_set('memory_limit', '512M');
@@ -306,6 +307,9 @@ try {
     $resourceNodes = $xp->query('//*[local-name()="resource"]');
     $scoCount = 0;
     $firstLaunchScoId = null;
+    $firstLaunchHref = '';
+    $activityTree = [];
+    $resourceMetadata = [];
 
     foreach ($resourceNodes as $resNode) {
         $type          = $resNode->getAttribute('type') ?: 'asset';
@@ -350,6 +354,10 @@ try {
         $ms          = $resNode->getAttribute('adlcp:masteryscore') ?: $resNode->getAttribute('masteryscore');
         $mastery     = ($ms !== '') ? (float)$ms : null;
 
+        // Manifest-derived metadata for the package fingerprint.
+        $activityTree[] = ['identifier' => $identifier, 'identifierref' => $identifierref, 'title' => $itemTitle, 'type' => $scormType];
+        $resourceMetadata[] = ['identifier' => $identifier, 'type' => $type, 'href' => $launchHref, 'scormType' => $scormType];
+
         $pdo->prepare("INSERT INTO sco_items
             (package_id, identifier, identifierref, title, launch_url, scorm_type,
              data_from_lms, prerequisites, max_time_allowed, time_limit_action, mastery_score)
@@ -359,13 +367,57 @@ try {
 
         if ($scormType === 'sco' && $firstLaunchScoId === null) {
             $firstLaunchScoId = (int)$pdo->lastInsertId();
+            $firstLaunchHref = $launchHref;
         }
         $scoCount++;
     }
 
     if ($firstLaunchScoId !== null) {
-        $pdo->prepare("UPDATE scorm_packages SET launch_sco_id=?, upload_path=? WHERE id=?")
-            ->execute([$firstLaunchScoId, 'content/scorm/' . $pkgId, $pkgId]);
+        // ── Edition detection + package fingerprint (manifest-driven) ──
+        $edition = scormDetectEdition($manifestXml);
+        $schemaVersion = strpos($edition, '2004') === 0 ? '2004' : '1.2';
+        $rootEl = $dom->documentElement;
+        $manifestId = $rootEl->getAttribute('identifier') ?: '';
+        $svNode = $xp->query('//*[local-name()="schemaversion"]')->item(0);
+        $packageVersion = $svNode ? trim($svNode->textContent) : '';
+
+        $hashParts = [];
+        $riiH = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($packageDir, FilesystemIterator::SKIP_DOTS));
+        foreach ($riiH as $hf) {
+            if (!$hf->isFile()) continue;
+            $hashParts[] = str_replace(DIRECTORY_SEPARATOR, '/', substr($hf->getPathname(), strlen($packageDir) + 1)) . ':' . $hf->getSize();
+        }
+        sort($hashParts, SORT_STRING);
+        $contentHash = hash('sha256', implode("\n", $hashParts));
+
+        $fingerprint = json_encode([
+            'standard'     => $schemaVersion,
+            'edition'      => $edition,
+            'launch_href'  => $firstLaunchHref,
+            'manifest_id'  => $manifestId,
+            'sco_count'    => $scoCount,
+            'content_hash' => $contentHash,
+            'asset_count'  => $extractedCount,
+        ]);
+
+        $pdo->prepare("UPDATE scorm_packages SET
+                launch_sco_id = ?, upload_path = ?,
+                scorm_edition = ?, manifest_id = ?, package_version = ?, sco_count = ?,
+                activity_tree = ?, resource_metadata = ?, content_hash = ?, fingerprint = ?
+                WHERE id = ?")
+            ->execute([
+                $firstLaunchScoId,
+                'content/scorm/' . $pkgId,
+                $edition,
+                $manifestId,
+                $packageVersion,
+                $scoCount,
+                json_encode($activityTree),
+                json_encode($resourceMetadata),
+                $contentHash,
+                $fingerprint,
+                $pkgId,
+            ]);
     } else {
         $pdo->prepare("UPDATE scorm_packages SET upload_path=? WHERE id=?")
             ->execute(['content/scorm/' . $pkgId, $pkgId]);

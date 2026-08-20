@@ -5,12 +5,16 @@
  */
 
 require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../includes/security.php';
 
 requireLogin();
 
 if (!isAdmin()) {
     redirectTo('dashboard/');
 }
+
+ensureSecurityTables();
+requireMfaComplete();
 
 $userRole = $_SESSION['user_role'] ?? 'admin';
 
@@ -78,6 +82,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (sendGHLPortalEmail($email, $fName, $subject, $htmlBody, $lName)) {
             $invite_status = "sent";
+            // ── Audit: admin invited a new user ──
+            logSecurityEvent('user_invited', 'info', ['email' => $email, 'department' => $department]);
         } else {
             $invite_status = "error";
         }
@@ -105,6 +111,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($userId > 0 && in_array($role, $allowedRoles, true)) {
+            // Capture the prior state for the audit trail.
+            $beforeStmt = $pdo->prepare("SELECT id, email, role, department, is_team_lead FROM users WHERE id = ?");
+            $beforeStmt->execute([$userId]);
+            $before = $beforeStmt->fetch(PDO::FETCH_ASSOC);
+
             $stmt = $pdo->prepare("UPDATE users SET role = ?, department = ?, is_team_lead = ? WHERE id = ?");
             $stmt->execute([$role, $department, $isLead, $userId]);
 
@@ -112,6 +123,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (isSuperAdmin() && isset($_POST['user_org_id'])) {
                 $orgId = !empty($_POST['user_org_id']) ? (int)$_POST['user_org_id'] : null;
                 $pdo->prepare("UPDATE users SET organization_id = ? WHERE id = ?")->execute([$orgId, $userId]);
+            }
+
+            // ── Audit: admin user update / role change ──
+            if ($before) {
+                $targetEmail = (string)($before['email'] ?? '');
+                if (($before['role'] ?? '') !== $role) {
+                    logSecurityEvent(
+                        'role_changed',
+                        $role === 'super_admin' ? 'critical' : 'warning',
+                        ['old_role' => $before['role'], 'new_role' => $role, 'user_id' => $userId, 'target_email' => $targetEmail],
+                        $userId,
+                        $targetEmail
+                    );
+                    checkSecurityAlerts('role_changed', ['new_role' => $role, 'target_email' => $targetEmail]);
+                } else {
+                    logSecurityEvent(
+                        'user_updated',
+                        'info',
+                        ['user_id' => $userId, 'department' => $department, 'is_team_lead' => $isLead, 'target_email' => $targetEmail],
+                        $userId,
+                        $targetEmail
+                    );
+                }
             }
 
             if (isset($_SESSION['user_id']) && $_SESSION['user_id'] === $userId) {
@@ -133,6 +167,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $enrollUser = $stmt->fetch(PDO::FETCH_ASSOC);
 
                 if ($enrollUser) {
+                    // ── Audit: admin enrolled a learner in a course ──
+                    logSecurityEvent(
+                        'user_enrolled',
+                        'info',
+                        ['user_id' => $enrollUserId, 'course_id' => $enrollCourseId, 'target_email' => $enrollUser['email'] ?? ''],
+                        $enrollUserId,
+                        (string)($enrollUser['email'] ?? '')
+                    );
+
                     $registrationId = 'reg_' . substr(md5($enrollUser['email'] . $enrollCourseId), 0, 12);
                     $payload = [
                         'courseId' => $enrollCourseId,
@@ -242,6 +285,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif (!$canDelete) {
                     $userDeleteStatus = 'forbidden';
                 } else {
+                    // ── Audit: account deletion (critical) ──
+                    logSecurityEvent(
+                        'user_deleted',
+                        'critical',
+                        ['user_id' => $targetId, 'role' => $target['role'] ?? '', 'target_email' => $target['email'] ?? ''],
+                        $targetId,
+                        (string)($target['email'] ?? '')
+                    );
+                    checkSecurityAlerts('user_deleted', ['target_email' => (string)($target['email'] ?? '')]);
+
                     // Remove their SCORM registrations first (native backend no-op, but keeps
                     // external backends in sync) — mirrors api/revoke.php.
                     $regStmt = $pdo->prepare("SELECT registration_id FROM user_registrations WHERE user_id = ?");

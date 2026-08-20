@@ -5,9 +5,12 @@
  */
 
 require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../includes/security.php';
+ensureSecurityTables();
 
 $error = '';
 $success_msg = '';
+$cooldownSeconds = 0; // countdown shown by the generic lockout message
 
 $viewer_url    = buildUrl('course-viewer/');
 $signup_url    = buildUrl('signup/');
@@ -83,6 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['auto_launch'])) {
     } else {
         $email = strtolower(trim($_POST['email'] ?? ''));
         $password = $_POST['password'] ?? '';
+        $cooldownSeconds = 0;
 
         // Local staging test user (no database required)
         if ($email === TEST_USER_EMAIL && $password === TEST_USER_PASSWORD) {
@@ -95,20 +99,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['auto_launch'])) {
             $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ?");
             $stmt->execute([$email]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            $userId = $user ? (int)$user['id'] : 0;
 
-            if ($user && password_verify($password, $user['password_hash'])) {
+            // ── Account lockout gate ──
+            // Generic message: identical whether the email exists or not, so
+            // attackers cannot enumerate accounts from the lockout UI.
+            $lock = isAccountLocked($userId, $email);
+            if ($lock['locked']) {
+                $cooldownSeconds = $lock['remaining_seconds'];
+                $error = genericLockoutMessage($cooldownSeconds);
+                recordLoginAttempt($userId ?: null, $email, false);
+                logSecurityEvent('login_blocked_locked', 'warning', ['reason' => 'account_locked'], $userId ?: null, $email);
+            } elseif ($user && password_verify($password, $user['password_hash'])) {
+                // ── Credentials valid ──
                 if (isset($user['is_verified']) && $user['is_verified'] == 0) {
                     $error = "Verify your email before logging in.";
+                    recordLoginAttempt($userId, $email, false);
+                    logSecurityEvent('login_failure', 'info', ['reason' => 'unverified'], $userId, $email);
                 } else {
-                    // FIX: Regenerate session ID FIRST to prevent session fixation,
-                    // then set session variables, and close session write before redirect.
-                    // This ensures data is fully committed to storage before the next request.
+                    resetFailedLogin($userId);
+                    recordLoginAttempt($userId, $email, true);
+                    logSecurityEvent('login_success', 'info', [], $userId, $email);
+                    // FIX: Regenerate session ID FIRST to prevent session fixation.
                     session_regenerate_id(true);
-                    $_SESSION['user_id'] = $user['id'];
+                    $role = $user['role'] ?? 'student';
+
+                    // ── Mandatory email MFA for administrators ──
+                    if (isAdminRole($role)) {
+                        $code = issueMfaChallenge($userId);
+                        sendMfaCodeEmail($user, $code);
+                        $_SESSION['mfa_pending_user_id'] = $userId;
+                        $_SESSION['email'] = $user['email'];
+                        logSecurityEvent('mfa_issued', 'info', [], $userId, $email);
+                        session_write_close();
+                        redirectTo('login/mfa.php');
+                    }
+
+                    $_SESSION['user_id'] = $userId;
                     $_SESSION['email']   = $user['email'];
-                    $_SESSION['user_role'] = $user['role'] ?? 'student';
+                    $_SESSION['user_role'] = $role;
                     $_SESSION['organization_id'] = $user['organization_id'] ?? null;
-                    error_log('[LOGIN SUCCESS] user_id=' . $user['id'] . ' email=' . $user['email'] . ' role=' . ($user['role'] ?? 'student') . ' session_id=' . session_id());
+                    $_SESSION['mfa_verified_at'] = time();
+                    error_log('[LOGIN SUCCESS] user_id=' . $userId . ' email=' . $user['email'] . ' role=' . $role . ' session_id=' . session_id());
                     session_write_close();
                     // Redirect to terms page if not accepted yet
                     if (empty($user['terms_accepted_at'])) {
@@ -117,11 +149,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['auto_launch'])) {
                     redirectTo('dashboard/');
                 }
             } else {
-                $error = "The credentials provided do not match our records.";
+                // ── Credentials invalid ──
+                $lockResult = applyFailedLogin($userId, $email);
+                $ipResult = recordLoginAttempt($userId ?: null, $email, false, $lockResult['locked']);
+                logSecurityEvent('login_failure', 'warning', ['reason' => 'bad_credentials'], $userId ?: null, $email);
+                if ($lockResult['locked']) {
+                    logSecurityEvent('account_locked', 'critical', ['email' => $email], $userId ?: null, $email);
+                    checkSecurityAlerts('account_locked', ['email' => $email, 'user_id' => $lockResult['user_id']]);
+                }
+                $cooldownSeconds = max($lockResult['remaining_seconds'], $ipResult['ip_remaining_seconds']);
+                $error = $cooldownSeconds > 0
+                    ? genericLockoutMessage($cooldownSeconds)
+                    : "The credentials provided do not match our records.";
             }
         } catch (PDOException $e) {
             error_log('[LOGIN DB ERROR] ' . $e->getMessage());
             $error = "Connection interrupted. Please try again.";
+        }
+    }
+
+    // If the client IP is still throttled (e.g., after a refresh), keep showing
+    // the generic countdown without revealing whether any account exists.
+    if ($cooldownSeconds <= 0 && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+        $cooldownSeconds = ipLockoutRemaining();
+        if ($cooldownSeconds > 0) {
+            $error = genericLockoutMessage($cooldownSeconds);
         }
     }
 }
@@ -230,6 +282,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['auto_launch'])) {
 
         <form method="POST" action="index.php">
             <?php echo csrfHiddenField(); ?>
+            <input type="hidden" id="lockoutCooldown" value="<?php echo (int)$cooldownSeconds; ?>">
             <div class="input-group">
                 <label>Email Address</label>
                 <input type="email" name="email" placeholder="name@example.com" required>
@@ -256,6 +309,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['auto_launch'])) {
             });
         });
     });
+
+    // ── Generic lockout countdown (no account confirmation) ──
+    (function () {
+        var cooldown = parseInt(document.getElementById('lockoutCooldown').value || '0', 10);
+        if (!cooldown || cooldown <= 0) return;
+        var submitBtn = document.querySelector('button[type="submit"]');
+        var errorBox = document.querySelector('.error');
+        if (submitBtn) submitBtn.disabled = true;
+        var tick = function () {
+            if (cooldown <= 0) {
+                if (errorBox) errorBox.textContent = 'Too many failed login attempts. Please try again.';
+                if (submitBtn) submitBtn.disabled = false;
+                return;
+            }
+            var m = Math.floor(cooldown / 60);
+            var s = cooldown % 60;
+            var label = (m > 0 ? m + 'm ' : '') + s + 's';
+            if (errorBox) errorBox.textContent = 'Too many failed login attempts. Please wait ' + label + ' before trying again.';
+            cooldown--;
+            setTimeout(tick, 1000);
+        };
+        tick();
+    })();
     </script>
 
         <div class="footer-links">

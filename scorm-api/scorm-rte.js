@@ -1,212 +1,613 @@
 /**
  * PURSUIT PATHWAYS LMS
- * NATIVE SCORM READER — Run-Time Environment (Phase 2)
+ * CROSS-VERSION SCORM RUN-TIME ENVIRONMENT (v3)
  *
- * This script implements both the SCORM 1.2 API (window.API) and the
- * SCORM 2004 API (window.API_1484_11).
+ * Exposes BOTH standards adapters:
+ *   - window.API          — SCORM 1.2 (LMSInitialize/LMSFinish/LMSGetValue/...)
+ *   - window.API_1484_11  — SCORM 2004 (Initialize/Terminate/GetValue/...)
  *
- * It is injected into every HTML page served from a SCORM package
- * (via scorm-content/serve.php). Because content is same-origin
- * (served from /scorm-content/), tracking data is POSTed directly
- * via fetch() to /scorm-api/store.php.
+ * Both adapters route into ONE normalized state model, so status, score, time,
+ * location, suspend data, interactions, objectives, and learner comments are
+ * captured consistently regardless of which API the authoring tool probes.
  *
- * Data captured:
- *   - cmi.core.* (1.2) and cmi.* (2004) — status, score, time, location
- *   - cmi.interactions.n.* — question-level answers/results
- *   - cmi.objectives.n.* — objective-level outcomes
- *   - suspend_data — bookmarks
- *   - Every LMSCommit() triggers a full-state persist
+ * Persistence: every Commit()/Terminate()/unload-beacon POSTs to
+ * scorm-api/store.php with a client-generated `request_id`. The server uses
+ * the request_id for exact-once handling, so retries, concurrent commits, and
+ * beacon+Terminate pairs never double-count time or duplicate attempts.
+ *
+ * Injected via scorm-content/serve.php into every content page.
  *
  * @package  PP_LMS
- * @version  1.0.0
+ * @version  3.0.0
  */
 
 (function () {
     'use strict';
 
-    // ── Configuration injected by serve.php ──
+    // ── Configuration (injected by serve.php) ──
     var cfg = window.SCORM_PACKAGE_CONFIG || {};
     var API_ENDPOINT = cfg.apiEndpoint || '/scorm-api/store.php';
     var PACKAGE_ID = parseInt(cfg.pkg || 0, 10);
     var SCO_ID = parseInt(cfg.sco || 0, 10);
-    var SCORM_VERSION = cfg.version || '1.2';
-    // The serve token authorises the store.php tracking POST without relying on
-    // the session cookie (SameSite=Lax is not sent from inside the iframe).
+    var SCORM_VERSION = cfg.version === '2004' ? '2004' : '1.2';
+    var SCORM_EDITION = cfg.edition || (SCORM_VERSION === '2004' ? '2004 3rd Edition' : '1.2');
+    var RTE_VERSION = '3.0.0';
+    var EXIT_URL = cfg.exitUrl || '/course-page/';
+
+    function editionSuspendLimit(version, edition) {
+        if (version === '2004') {
+            var e = String(edition || '').toLowerCase();
+            if (e.indexOf('2nd') >= 0) return 4000;        // 2004 2nd Ed: 4,000
+            if (e.indexOf('3rd') >= 0 || e.indexOf('4th') >= 0) return 64000; // 3rd/4th
+            return 64000;
+        }
+        return 4096; // SCORM 1.2
+    }
+    var SUSPEND_LIMIT = (parseInt(cfg.suspendLimit || 0, 10) > 0) ? parseInt(cfg.suspendLimit, 10) : editionSuspendLimit(SCORM_VERSION, SCORM_EDITION);
+
     if (cfg.token) {
         API_ENDPOINT += (API_ENDPOINT.indexOf('?') >= 0 ? '&' : '?') + 't=' + encodeURIComponent(cfg.token);
     }
-    // Where the TOP window should navigate when the course exits. We take
-    // over the exit navigation from Storyline because Storyline's own exit
-    // trigger opens the exit URL in a frame, which either trips
-    // X-Frame-Options or results in a nested iframe inside the player.
-    var EXIT_URL = cfg.exitUrl || '/course-page/';
 
-    // ── State ──
-    var initialized = false;
-    var terminated = false;
-    var lastError = '0';
-    var dirty = false;          // any values changed since last commit
-    var commitQueue = Promise.resolve();
-    var commitInFlight = false;
-    var pendingAfterCommit = null;
-    var sessionStartedAt = Date.now();
-    var lastPersistAt = Date.now();
-    var lastValue = {};         // element -> last value written by SCO
-    var initialState = null;    // data loaded from server on init
-    var attemptId = null;       // set after first successful persist
-    var coalesceTimer = null;
-    var SESSION_TERMINATE_ON_UNLOAD = true;
-
-    // ── SCORM 1.2 Error Codes ──
-    var ERR = {
-        NO_ERROR: '0',
-        GENERAL_EXCEPTION: '101',
-        INVALID_ARGUMENT: '201',
-        ELEMENT_NOT_ACCESSIBLE: '202',
-        ELEMENT_NOT_WRITABLE: '203',
-        ELEMENT_NOT_READABLE: '204'
+    // ── Version-specific error codes (preserved verbatim per standard) ──
+    var ERR12 = {
+        NO_ERROR: '0', GENERAL_EXCEPTION: '101', INVALID_ARGUMENT: '201',
+        ELEMENT_NOT_ACCESSIBLE: '202', ELEMENT_NOT_WRITABLE: '203', ELEMENT_NOT_READABLE: '204'
     };
-    if (SCORM_VERSION === '2004') {
-        // SCORM 2004 codes
-        ERR = {
-            NO_ERROR: '0',
-            GENERAL_EXCEPTION: '101',
-            INITIALIZATION_FAILED: '102',
-            INVALID_ARGUMENT: '301',
-            ELEMENT_NOT_ACCESSIBLE: '351',
-            ELEMENT_NOT_WRITABLE: '351',
-            ELEMENT_NOT_READABLE: '351'
-        };
-    }
-
-    // ── Readable / writable element whitelists ──
-    // SCORM 1.2
-    var READABLE_12 = {
-        'cmi.core._children': 1, 'cmi.core.student_id': 1, 'cmi.core.student_name': 1,
-        'cmi.core.lesson_location': 1, 'cmi.core.credit': 1, 'cmi.core.lesson_status': 1,
-        'cmi.core.entry': 1, 'cmi.core.score.raw': 1, 'cmi.core.score.max': 1,
-        'cmi.core.score.min': 1, 'cmi.core.total_time': 1, 'cmi.core.lesson_mode': 1,
-        'cmi.core.exit': 1, 'cmi.core.session_time': 1, 'cmi.suspend_data': 1,
-        'cmi.launch_data': 1, 'cmi.comments': 1, 'cmi.comments_from_lms': 1,
-        'cmi.student_data._children': 1, 'cmi.student_data.mastery_score': 1,
-        'cmi.student_data.max_time_allowed': 1, 'cmi.student_data.time_limit_action': 1,
-        'cmi.student_preference._children': 1, 'cmi.student_preference.audio': 1,
-        'cmi.student_preference.language': 1, 'cmi.student_preference.speed': 1,
-        'cmi.student_preference.text': 1
+    var ERR2004 = {
+        NO_ERROR: '0', GENERAL_EXCEPTION: '101', INITIALIZATION_FAILED: '102',
+        INVALID_ARGUMENT: '301', ELEMENT_NOT_ACCESSIBLE: '351',
+        ELEMENT_NOT_WRITABLE: '351', ELEMENT_NOT_READABLE: '351'
     };
-    var WRITABLE_12 = {
-        'cmi.core.lesson_location': 1, 'cmi.core.lesson_status': 1, 'cmi.core.exit': 1,
-        'cmi.core.score.raw': 1, 'cmi.core.score.max': 1, 'cmi.core.score.min': 1,
-        'cmi.core.session_time': 1, 'cmi.suspend_data': 1, 'cmi.comments': 1,
-        'cmi.student_preference.audio': 1, 'cmi.student_preference.language': 1,
-        'cmi.student_preference.speed': 1, 'cmi.student_preference.text': 1
+    var ERR = SCORM_VERSION === '2004' ? ERR2004 : ERR12;
+    var ERRSTR = SCORM_VERSION === '2004' ? {
+        '0': 'No error', '101': 'General exception', '102': 'Initialization failed',
+        '301': 'Invalid argument', '351': 'Element is not available'
+    } : {
+        '0': 'No error', '101': 'General exception', '201': 'Invalid argument',
+        '202': 'Element is not accessible', '203': 'Element is not writable', '204': 'Element is not readable'
     };
 
-    // SCORM 2004
-    var READABLE_2004 = {
-        'cmi._version': 1, 'cmi.comments_from_learner._children': 1,
-        'cmi.comments_from_lms._children': 1, 'cmi.completion_status': 1,
-        'cmi.completion_threshold': 1, 'cmi.credit': 1, 'cmi.entry': 1,
-        'cmi.exit': 1, 'cmi.interactions._children': 1, 'cmi.interactions._count': 1,
-        'cmi.launch_data': 1, 'cmi.learner_id': 1, 'cmi.learner_name': 1,
-        'cmi.learner_preference._children': 1, 'cmi.learner_preference.audio_level': 1,
-        'cmi.learner_preference.language': 1, 'cmi.learner_preference.delivery_speed': 1,
-        'cmi.learner_preference.audio_captioning': 1, 'cmi.location': 1,
-        'cmi.max_time_allowed': 1, 'cmi.mode': 1, 'cmi.objectives._children': 1,
-        'cmi.objectives._count': 1, 'cmi.progress_measure': 1, 'cmi.scaled_passing_score': 1,
-        'cmi.score._children': 1, 'cmi.score.scaled': 1, 'cmi.score.raw': 1,
-        'cmi.score.min': 1, 'cmi.score.max': 1, 'cmi.session_time': 1,
-        'cmi.success_status': 1, 'cmi.suspend_data': 1, 'cmi.time_limit_action': 1,
-        'cmi.total_time': 1
+    // ── Shared normalized state model ──
+    var state = {
+        initialized: false,
+        terminated: false,
+        dirty: false,
+        lastError: '0',
+        attemptId: null,
+        entry: 'ab-initio',
+        scalars: {},          // lowercase element -> raw value (1.2 AND 2004 spellings)
+        sessionOnly: {},      // accepted for the session only, never persisted
+        interactions: {},     // index -> record
+        objectives: {},       // index -> record
+        comments: [],         // [{index, comment, location, timestamp}]
+        resumeApplied: false,
+        requestSeq: 0,
+        sessionStartedAt: Date.now(),
+        lastPersistAt: Date.now(),
+        totalSeconds: 0,
+        commitCount: 0,
+        commitInFlight: false,
+        pendingAfterCommit: null,
+        pendingRequestId: null,   // request_id of a failed persist, to reuse
+        pendingDeltaMs: 0,        // delta carried by that failed persist
+        errors: []                // bounded diagnostic log
     };
-    var WRITABLE_2004 = {
-        'cmi.comments_from_learner._children': 1, 'cmi.completion_status': 1,
-        'cmi.exit': 1, 'cmi.interactions._children': 1, 'cmi.interactions._count': 1,
-        'cmi.learner_preference.audio_level': 1, 'cmi.learner_preference.language': 1,
-        'cmi.learner_preference.delivery_speed': 1, 'cmi.learner_preference.audio_captioning': 1,
-        'cmi.location': 1, 'cmi.objectives._children': 1, 'cmi.objectives._count': 1,
-        'cmi.progress_measure': 1, 'cmi.score.scaled': 1, 'cmi.score.raw': 1,
-        'cmi.score.min': 1, 'cmi.score.max': 1, 'cmi.session_time': 1,
-        'cmi.success_status': 1, 'cmi.suspend_data': 1
-    };
-    // All interaction/objective sub-elements are writable
-    for (var i = 0; i < 200; i++) {
-        var baseI = 'cmi.interactions.' + i + '.';
-        var baseO = 'cmi.objectives.' + i + '.';
-        ['id', 'type', 'timestamp', 'weighting', 'learner_response', 'result',
-         'latency', 'description', 'correct_responses._count'].forEach(function (f) {
-            WRITABLE_2004[baseI + f] = 1;
-            READABLE_2004[baseI + f] = 1;
-        });
-        for (var c = 0; c < 20; c++) {
-            WRITABLE_2004[baseI + 'correct_responses.' + c + '.pattern'] = 1;
-            READABLE_2004[baseI + 'correct_responses.' + c + '.pattern'] = 1;
-            READABLE_2004[baseI + 'correct_responses.' + c + '.id'] = 1;
-            WRITABLE_2004[baseI + 'correct_responses.' + c + '.id'] = 1;
-        }
-        ['id', 'score.scaled', 'score.raw', 'score.min', 'score.max',
-         'completion_status', 'success_status', 'progress_measure', 'description'].forEach(function (f) {
-            WRITABLE_2004[baseO + f] = 1;
-            READABLE_2004[baseO + f] = 1;
-        });
-    }
 
-    var is2004 = SCORM_VERSION === '2004';
-    // Union of both versions' whitelists so either API (window.API for SCORM
-    // 1.2 or window.API_1484_11 for SCORM 2004) can read/write its elements
-    // regardless of the detected package version. Rise 360 / Storyline
-    // sometimes probe the API that doesn't match the declared version, and a
-    // single-version whitelist would make every Get/Set fail -> no tracking.
-    var READABLE = {};
-    var WRITABLE = {};
-    (function (src, dst) { for (var k in src) dst[k] = 1; })(READABLE_12, READABLE);
-    (function (src, dst) { for (var k in src) dst[k] = 1; })(READABLE_2004, READABLE);
-    (function (src, dst) { for (var k in src) dst[k] = 1; })(WRITABLE_12, WRITABLE);
-    (function (src, dst) { for (var k in src) dst[k] = 1; })(WRITABLE_2004, WRITABLE);
-
-    // ── Session computation ──
+    function setError(code) { state.lastError = String(code); }
+    function is2004() { return SCORM_VERSION === '2004'; }
     function pad2(n) { return n < 10 ? '0' + n : String(n); }
     function formatDuration(ms) {
-        var s = Math.floor(ms / 1000);
+        var s = Math.floor(Math.max(0, ms) / 1000);
         var h = Math.floor(s / 3600);
         var m = Math.floor((s % 3600) / 60);
         var sec = s % 60;
         return 'PT' + h + 'H' + m + 'M' + sec + 'S';
     }
+    function makeRequestId() {
+        state.requestSeq += 1;
+        return 'c' + Date.now().toString(36) + '-' + state.requestSeq.toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    }
+    function logError(type, element, message) {
+        state.errors.push({ type: type, element: element, message: message, at: Date.now() });
+        if (state.errors.length > 50) state.errors.shift();
+        if (console && console.warn) {
+            console.warn('[SCORM-RTE] ' + type + ' ' + (element || '') + ': ' + message);
+        }
+    }
+    function serializeValue(v) {
+        if (typeof v === 'string' || v === null || v === undefined) return v === null || v === undefined ? '' : v;
+        return JSON.stringify(v);
+    }
 
-    // ── Persist ──
-    function buildStatePayload(terminating) {
-        // session_delta_ms is the time elapsed since the last persist —
-        // incremental so the server can accumulate total time accurately
-        // without double-counting on repeated commits.
+    // ── Element whitelists ──
+    // SCORM 1.2 (cmi.core.*) plus the aliases common exporters use, and the
+    // SCORM 2004 elements accepted on 1.2 packages (some tools probe both).
+    var READ12 = {};
+    var WRITE12 = {};
+    var READ2004 = {};
+    var WRITE2004 = {};
+
+    (function (list) {
+        for (var i = 0; i < list.length; i++) { READ12[list[i]] = 1; }
+    })([
+        'cmi.core._children', 'cmi.core.student_id', 'cmi.core.student_name',
+        'cmi.core.lesson_location', 'cmi.core.credit', 'cmi.core.lesson_status',
+        'cmi.core.entry', 'cmi.core.score.raw', 'cmi.core.score.max', 'cmi.core.score.min',
+        'cmi.core.total_time', 'cmi.core.lesson_mode', 'cmi.core.exit', 'cmi.core.session_time',
+        'cmi.core.student_preference.audio', 'cmi.core.student_preference.language',
+        'cmi.core.student_preference.speed', 'cmi.core.student_preference.text',
+        'cmi.suspend_data', 'cmi.launch_data', 'cmi.comments', 'cmi.comments_from_lms',
+        'cmi.student_data.mastery_score', 'cmi.student_data.max_time_allowed',
+        'cmi.student_data.time_limit_action', 'cmi.student_data.credit', 'cmi.student_data.lesson_mode',
+        'cmi.student_data.attempt_number',
+        // 2004 spellings accepted on 1.2 packages (cross-version exporters)
+        'cmi.completion_status', 'cmi.success_status', 'cmi.location', 'cmi.score.scaled',
+        'cmi.score.raw', 'cmi.score.max', 'cmi.score.min', 'cmi.entry', 'cmi.exit',
+        'cmi.mode', 'cmi.credit', 'cmi.session_time', 'cmi.total_time', 'cmi.progress_measure',
+        'cmi.completion_threshold', 'cmi.scaled_passing_score', 'cmi.learner_id', 'cmi.learner_name',
+        'cmi._version', 'cmi._children', 'cmi.max_time_allowed', 'cmi.time_limit_action',
+        'cmi.launch_data'
+    ]);
+    for (var k in READ12) { WRITE12[k] = 1; }
+
+    (function (list) {
+        for (var i = 0; i < list.length; i++) { READ2004[list[i]] = 1; }
+    })([
+        'cmi._version', 'cmi.comments_from_learner._count', 'cmi.comments_from_lms._count',
+        'cmi.completion_status', 'cmi.completion_threshold', 'cmi.credit', 'cmi.entry', 'cmi.exit',
+        'cmi.interactions._count', 'cmi.launch_data', 'cmi.learner_id', 'cmi.learner_name',
+        'cmi.learner_preference.audio', 'cmi.learner_preference.language',
+        'cmi.learner_preference.speed', 'cmi.learner_preference.text',
+        'cmi.location', 'cmi.max_time_allowed', 'cmi.mode', 'cmi.objectives._count',
+        'cmi.progress_measure', 'cmi.scaled_passing_score', 'cmi.score.scaled', 'cmi.score.raw',
+        'cmi.score.min', 'cmi.score.max', 'cmi.session_time', 'cmi.success_status',
+        'cmi.suspend_data', 'cmi.time_limit_action', 'cmi.total_time', 'cmi._children',
+        // 1.2 spellings accepted on 2004 packages (cross-version exporters)
+        'cmi.core.lesson_status', 'cmi.core.lesson_location', 'cmi.core.entry', 'cmi.core.exit',
+        'cmi.core.credit', 'cmi.core.lesson_mode', 'cmi.core.session_time', 'cmi.core.total_time',
+        'cmi.core.score.raw', 'cmi.core.score.max', 'cmi.core.score.min', 'cmi.core.student_id',
+        'cmi.core.student_name'
+    ]);
+    for (var k2 in READ2004) { WRITE2004[k2] = 1; }
+
+    // Read-only (LMS-owned) elements — writes are refused with a writable error.
+    var READONLY = {
+        'cmi.core.student_id': 1, 'cmi.core.student_name': 1, 'cmi.core.lesson_mode': 1,
+        'cmi.core.credit': 1, 'cmi.core.entry': 1, 'cmi.core.total_time': 1, 'cmi.core._children': 1,
+        'cmi.core.session_time': 1, 'cmi.core.score._children': 1,
+        'cmi.learner_id': 1, 'cmi.learner_name': 1, 'cmi.mode': 1, 'cmi.credit': 1, 'cmi.entry': 1,
+        'cmi.total_time': 1, 'cmi._version': 1, 'cmi._children': 1, 'cmi.session_time': 1,
+        'cmi.launch_data': 1, 'cmi.max_time_allowed': 1, 'cmi.time_limit_action': 1,
+        'cmi.score._children': 1
+    };
+    // Session-only preferences: accepted + readable for the session, never
+    // persisted, never claimed as stored (documented in the compatibility
+    // contract). Kept out of the persist payload.
+    var SESSION_ONLY = {
+        'cmi.core.student_preference.audio': 1, 'cmi.core.student_preference.language': 1,
+        'cmi.core.student_preference.speed': 1, 'cmi.core.student_preference.text': 1,
+        'cmi.learner_preference.audio': 1, 'cmi.learner_preference.language': 1,
+        'cmi.learner_preference.speed': 1, 'cmi.learner_preference.text': 1
+    };
+    // Explicitly unsupported — recognised but refused, never silently accepted.
+    var UNSUPPORTED = {
+        'cmi.comments_from_lms': 1,
+        'cmi.comments_from_learner._count': 1, 'cmi.comments_from_lms._count': 1,
+        'cmi.interactions._count': 1, 'cmi.objectives._count': 1,
+        'cmi.student_data.attempt_number': 1
+    };
+
+    // Cross-version alias lookup for GetValue (1.2 <-> 2004 spellings).
+    function aliasesFor(lower) {
+        var a = {
+            'cmi.core.lesson_status': ['cmi.completion_status'],
+            'cmi.completion_status': ['cmi.core.lesson_status'],
+            'cmi.core.lesson_location': ['cmi.location'],
+            'cmi.location': ['cmi.core.lesson_location'],
+            'cmi.core.score.raw': ['cmi.score.raw'],
+            'cmi.score.raw': ['cmi.core.score.raw'],
+            'cmi.core.score.max': ['cmi.score.max'],
+            'cmi.score.max': ['cmi.core.score.max'],
+            'cmi.core.score.min': ['cmi.score.min'],
+            'cmi.score.min': ['cmi.core.score.min'],
+            'cmi.core.entry': ['cmi.entry'],
+            'cmi.entry': ['cmi.core.entry'],
+            'cmi.core.exit': ['cmi.exit'],
+            'cmi.exit': ['cmi.core.exit'],
+            'cmi.core.session_time': ['cmi.session_time'],
+            'cmi.session_time': ['cmi.core.session_time'],
+            'cmi.core.credit': ['cmi.credit'],
+            'cmi.credit': ['cmi.core.credit'],
+            'cmi.core.lesson_mode': ['cmi.mode'],
+            'cmi.mode': ['cmi.core.lesson_mode'],
+            'cmi.core.total_time': ['cmi.total_time'],
+            'cmi.total_time': ['cmi.core.total_time']
+        };
+        return a[lower];
+    }
+
+    function isArrayElement(el) { return /\.\d+\./.test(el); }
+
+    // ── Structured element storage ──
+    // Interactions, objectives, and learner comments are stored as structured
+    // records AND mirrored to the flat scalars map (so the payload is
+    // compatible with both the structured server parser and the flat fallback).
+    function ensureInteraction(idx) {
+        if (!state.interactions[idx]) {
+            state.interactions[idx] = { index: idx, correct_responses: [], objectives: [] };
+        }
+        return state.interactions[idx];
+    }
+    function storeInteractionField(idx, field, val) {
+        var rec = ensureInteraction(idx);
+        var m;
+        if ((m = field.match(/^correct_responses\.(\d+)\.pattern$/))) {
+            var ci = parseInt(m[1], 10);
+            rec.correct_responses[ci] = rec.correct_responses[ci] || { id: '', pattern: '' };
+            rec.correct_responses[ci].pattern = serializeValue(val);
+        } else if ((m = field.match(/^correct_responses\.(\d+)\.id$/))) {
+            var ci2 = parseInt(m[1], 10);
+            rec.correct_responses[ci2] = rec.correct_responses[ci2] || { id: '', pattern: '' };
+            rec.correct_responses[ci2].id = serializeValue(val);
+        } else if ((m = field.match(/^objectives\.(\d+)\.id$/))) {
+            var oi = parseInt(m[1], 10);
+            rec.objectives[oi] = { id: serializeValue(val) };
+        } else if (field === 'learner_response') {
+            rec.learner_response = val; // may be a string or an array (2004)
+        } else {
+            rec[field] = serializeValue(val);
+        }
+        return rec;
+    }
+    function storeObjectiveField(idx, field, val) {
+        var rec = state.objectives[idx] || (state.objectives[idx] = { index: idx, score: {} });
+        var m;
+        if ((m = field.match(/^score\.(raw|scaled|min|max)$/))) {
+            rec.score = rec.score || {};
+            rec.score[m[1]] = serializeValue(val);
+        } else {
+            rec[field] = serializeValue(val);
+        }
+        return rec;
+    }
+    function storeCommentField(idx, field, val) {
+        var rec = null;
+        for (var i = 0; i < state.comments.length; i++) {
+            if (state.comments[i].index === idx) { rec = state.comments[i]; break; }
+        }
+        if (!rec) {
+            rec = { index: idx };
+            state.comments.push(rec);
+        }
+        if (field === 'comment') rec.comment = serializeValue(val);
+        else if (field === 'location') rec.location = serializeValue(val);
+        else if (field === 'timestamp') rec.timestamp = serializeValue(val);
+        return rec;
+    }
+
+    function getInteractionField(idx, field) {
+        var rec = state.interactions[idx];
+        if (!rec) return { value: null, notFound: true };
+        var m;
+        if ((m = field.match(/^correct_responses\.(\d+)\.pattern$/))) {
+            return { value: rec.correct_responses[m[1]] ? rec.correct_responses[m[1]].pattern : null, notFound: !(rec.correct_responses[m[1]] && rec.correct_responses[m[1]].pattern !== undefined) };
+        }
+        if ((m = field.match(/^correct_responses\.(\d+)\.id$/))) {
+            return { value: rec.correct_responses[m[1]] ? rec.correct_responses[m[1]].id : null, notFound: !(rec.correct_responses[m[1]] && rec.correct_responses[m[1]].id !== undefined) };
+        }
+        if ((m = field.match(/^objectives\.(\d+)\.id$/))) {
+            return { value: rec.objectives[m[1]] ? rec.objectives[m[1]].id : null, notFound: !(rec.objectives[m[1]] && rec.objectives[m[1]].id !== undefined) };
+        }
+        return { value: rec[field] !== undefined ? rec[field] : null, notFound: rec[field] === undefined };
+    }
+    function getObjectiveField(idx, field) {
+        var rec = state.objectives[idx];
+        if (!rec) return { value: null, notFound: true };
+        var m = field.match(/^score\.(raw|scaled|min|max)$/);
+        if (m) {
+            return { value: rec.score && rec.score[m[1]] !== undefined ? rec.score[m[1]] : null, notFound: !(rec.score && rec.score[m[1]] !== undefined) };
+        }
+        return { value: rec[field] !== undefined ? rec[field] : null, notFound: rec[field] === undefined };
+    }
+    function getCommentField(idx, field) {
+        var rec = null;
+        for (var i = 0; i < state.comments.length; i++) {
+            if (state.comments[i].index === idx) { rec = state.comments[i]; break; }
+        }
+        if (!rec) return { value: null, notFound: true };
+        return { value: rec[field] !== undefined ? rec[field] : null, notFound: rec[field] === undefined };
+    }
+
+    function normalizeInteraction(rec) {
+        var r = {};
+        ['id', 'type', 'learner_response', 'result', 'weighting', 'latency', 'timestamp', 'description'].forEach(function (k) {
+            if (rec[k] !== undefined) r[k] = rec[k];
+        });
+        r.correct_responses = Array.isArray(rec.correct_responses) ? rec.correct_responses.slice() : [];
+        r.objectives = Array.isArray(rec.objectives) ? rec.objectives.slice() : [];
+        return r;
+    }
+
+    // ── Shared GetValue / SetValue (routed by both adapters) ──
+    function setValue(el, val) {
+        var name = String(el || '').trim();
+        if (name === '') { setError(ERR.INVALID_ARGUMENT); return false; }
+        var lower = name.toLowerCase();
+
+        // Explicitly unsupported element — refuse, never silently accept.
+        if (UNSUPPORTED[lower]) {
+            setError(ERR.ELEMENT_NOT_WRITABLE);
+            logError('unsupported-write', name, 'Recognised but not implemented — value NOT stored.');
+            return false;
+        }
+        // LMS-owned read-only elements.
+        if (READONLY[lower]) {
+            setError(ERR.ELEMENT_NOT_WRITABLE);
+            logError('readonly-write', name, 'Element is read-only.');
+            return false;
+        }
+        // Session-only preferences: accepted, readable, never persisted.
+        if (SESSION_ONLY[lower]) {
+            state.sessionOnly[lower] = serializeValue(val);
+            setError(ERR.NO_ERROR);
+            return true;
+        }
+
+        var writable = WRITE12[lower] === 1 || WRITE2004[lower] === 1 || isArrayElement(lower);
+        if (!writable) {
+            setError(ERR.INVALID_ARGUMENT);
+            logError('unknown-element', name, 'Not a recognised element.');
+            return false;
+        }
+
+        // Edition-aware suspend_data truncation (4096 / 4000 / 64000).
+        if (lower === 'cmi.suspend_data') {
+            var sv = serializeValue(val);
+            if (sv.length > SUSPEND_LIMIT) {
+                sv = sv.slice(0, SUSPEND_LIMIT);
+                logError('truncate', name, 'suspend_data truncated to ' + SUSPEND_LIMIT + ' chars.');
+            }
+            state.scalars[lower] = sv;
+            state.dirty = true;
+            setError(ERR.NO_ERROR);
+            return true;
+        }
+
+        // Structured element families.
+        var im = lower.match(/^cmi\.interactions\.(\d+)\.(.+)$/);
+        if (im) { storeInteractionField(parseInt(im[1], 10), im[2], val); state.dirty = true; setError(ERR.NO_ERROR); return true; }
+        var om = lower.match(/^cmi\.objectives\.(\d+)\.(.+)$/);
+        if (om) { storeObjectiveField(parseInt(om[1], 10), om[2], val); state.dirty = true; setError(ERR.NO_ERROR); return true; }
+        var cm = lower.match(/^cmi\.comments_from_learner\.(\d+)\.(.+)$/);
+        if (cm) { storeCommentField(parseInt(cm[1], 10), cm[2], val); state.dirty = true; setError(ERR.NO_ERROR); return true; }
+
+        // Plain scalar.
+        state.scalars[lower] = serializeValue(val);
+        state.dirty = true;
+        setError(ERR.NO_ERROR);
+        return true;
+    }
+
+    function getValue(el) {
+        var name = String(el || '').trim();
+        var lower = name.toLowerCase();
+
+        if (!state.initialized) { setError(ERR.GENERAL_EXCEPTION); return null; }
+
+        // LMS-provided identity / mode / credit / entry / totals.
+        if (lower === 'cmi.core.student_id' || lower === 'cmi.learner_id') {
+            setError(ERR.NO_ERROR);
+            return (window.SCORM_USER && window.SCORM_USER.id) || '';
+        }
+        if (lower === 'cmi.core.student_name' || lower === 'cmi.learner_name') {
+            setError(ERR.NO_ERROR);
+            return (window.SCORM_USER && window.SCORM_USER.name) || '';
+        }
+        if (lower === 'cmi.core.lesson_mode' || lower === 'cmi.mode') {
+            setError(ERR.NO_ERROR);
+            return 'normal';
+        }
+        if (lower === 'cmi.core.credit' || lower === 'cmi.credit') {
+            setError(ERR.NO_ERROR);
+            return 'credit';
+        }
+        if (lower === 'cmi.core.entry' || lower === 'cmi.entry') {
+            setError(ERR.NO_ERROR);
+            return state.entry || 'ab-initio';
+        }
+        if (lower === 'cmi.core.total_time' || lower === 'cmi.total_time') {
+            setError(ERR.NO_ERROR);
+            var elapsed = state.totalSeconds > 0 ? state.totalSeconds : Math.floor((Date.now() - state.sessionStartedAt) / 1000);
+            return formatDuration(elapsed * 1000);
+        }
+        if (lower === 'cmi.core._children') {
+            setError(ERR.NO_ERROR);
+            return 'student_id,student_name,lesson_location,credit,lesson_status,entry,score,total_time,lesson_mode,exit,session_time';
+        }
+        if (lower === 'cmi._children') {
+            setError(ERR.NO_ERROR);
+            return 'comments_from_learner,completion_status,credit,entry,exit,interactions,launch_data,learner_id,learner_name,learner_preference,location,max_time_allowed,mode,objectives,progress_measure,scaled_passing_score,score,session_time,success_status,suspend_data,time_limit_action,total_time';
+        }
+        if (lower === 'cmi._version') {
+            setError(ERR.NO_ERROR);
+            return is2004() ? '1.0' : '1.2';
+        }
+
+        // Session-only preference reads.
+        if (SESSION_ONLY[lower]) {
+            setError(ERR.NO_ERROR);
+            return state.sessionOnly[lower] !== undefined ? state.sessionOnly[lower] : '';
+        }
+
+        // Explicitly unsupported — return not-reported with a readable error.
+        if (UNSUPPORTED[lower]) {
+            setError(ERR.ELEMENT_NOT_READABLE);
+            return null;
+        }
+
+        var readable = READ12[lower] === 1 || READ2004[lower] === 1 || isArrayElement(lower);
+        if (!readable) { setError(ERR.INVALID_ARGUMENT); return null; }
+
+        var im = lower.match(/^cmi\.interactions\.(\d+)\.(.+)$/);
+        if (im) { var iv = getInteractionField(parseInt(im[1], 10), im[2]); setError(iv.notFound ? ERR.ELEMENT_NOT_READABLE : ERR.NO_ERROR); return iv.value; }
+        var om2 = lower.match(/^cmi\.objectives\.(\d+)\.(.+)$/);
+        if (om2) { var ov = getObjectiveField(parseInt(om2[1], 10), om2[2]); setError(ov.notFound ? ERR.ELEMENT_NOT_READABLE : ERR.NO_ERROR); return ov.value; }
+        var cm2 = lower.match(/^cmi\.comments_from_learner\.(\d+)\.(.+)$/);
+        if (cm2) { var cv = getCommentField(parseInt(cm2[1], 10), cm2[2]); setError(cv.notFound ? ERR.ELEMENT_NOT_READABLE : ERR.NO_ERROR); return cv.value; }
+
+        var alias = aliasesFor(lower);
+        if (alias) {
+            for (var i = 0; i < alias.length; i++) {
+                if (state.scalars[alias[i]] !== undefined) {
+                    setError(ERR.NO_ERROR);
+                    return state.scalars[alias[i]];
+                }
+            }
+        }
+        if (state.scalars[lower] !== undefined) {
+            setError(ERR.NO_ERROR);
+            return state.scalars[lower];
+        }
+
+        setError(ERR.ELEMENT_NOT_READABLE);
+        return null; // not reported — distinct from an explicit empty/unknown value
+    }
+
+    // ── Persistence ──
+    // Every payload carries a unique client request_id (exact-once server
+    // handling) and an incremental session_delta_ms (no double-counted time).
+    // If a persist fails, its request_id + delta are retained so the very next
+    // attempt (e.g. the unload beacon) reuses them — the server either dedupes
+    // (if the original actually landed) or applies them (if it did not).
+    function buildPayload(terminating, reusePending) {
         var now = Date.now();
-        var delta = Math.floor(now - lastPersistAt);
-        lastPersistAt = now;
-        var payload = {
+        var delta;
+        var requestId;
+        if (reusePending && state.pendingRequestId) {
+            requestId = state.pendingRequestId;
+            delta = state.pendingDeltaMs;
+            state.pendingRequestId = null;
+            state.pendingDeltaMs = 0;
+        } else {
+            delta = Math.floor(now - state.lastPersistAt);
+            state.lastPersistAt = now;
+            requestId = makeRequestId();
+        }
+
+        var interactions = [];
+        Object.keys(state.interactions).forEach(function (k) {
+            var rec = state.interactions[k];
+            interactions.push({
+                index: parseInt(k, 10),
+                id: rec.id || '',
+                type: rec.type || '',
+                learner_response: rec.learner_response,
+                result: rec.result || '',
+                weighting: rec.weighting,
+                latency: rec.latency,
+                timestamp: rec.timestamp,
+                description: rec.description,
+                correct_responses: Array.isArray(rec.correct_responses) ? rec.correct_responses : [],
+                objectives: Array.isArray(rec.objectives) ? rec.objectives : []
+            });
+        });
+        var objectives = [];
+        Object.keys(state.objectives).forEach(function (k) {
+            var rec = state.objectives[k];
+            objectives.push({
+                index: parseInt(k, 10),
+                id: rec.id || '',
+                score: rec.score || {},
+                completion_status: rec.completion_status || '',
+                success_status: rec.success_status || '',
+                progress_measure: rec.progress_measure,
+                description: rec.description
+            });
+        });
+        var comments = [];
+        state.comments.forEach(function (c) {
+            comments.push({ index: c.index, comment: c.comment || '', location: c.location || '', timestamp: c.timestamp || null });
+        });
+
+        return {
             pkg: PACKAGE_ID,
             sco: SCO_ID,
             version: SCORM_VERSION,
-            attempt: attemptId,
+            edition: SCORM_EDITION,
+            attempt: state.attemptId,
+            request_id: requestId,
             terminating: !!terminating,
             session_delta_ms: delta,
-            values: lastValue
+            values: state.scalars,
+            interactions: interactions,
+            objectives: objectives,
+            comments: comments
         };
-        return payload;
+    }
+
+    function applyResume(initial) {
+        if (!initial || typeof initial !== 'object') return;
+        if (Array.isArray(initial.values)) {
+            initial.values.forEach(function (v) {
+                if (v && v.element) state.scalars[String(v.element).toLowerCase()] = v.value;
+            });
+        }
+        if (initial.map && typeof initial.map === 'object') {
+            Object.keys(initial.map).forEach(function (k) {
+                state.scalars[String(k).toLowerCase()] = initial.map[k];
+            });
+        }
+        if (Array.isArray(initial.interactions)) {
+            initial.interactions.forEach(function (rec) {
+                if (rec && typeof rec.index === 'number') {
+                    state.interactions[rec.index] = normalizeInteraction(rec);
+                }
+            });
+        }
+        if (Array.isArray(initial.objectives)) {
+            initial.objectives.forEach(function (rec) {
+                if (rec && typeof rec.index === 'number') state.objectives[rec.index] = rec;
+            });
+        }
+        if (Array.isArray(initial.comments)) {
+            state.comments = [];
+            initial.comments.forEach(function (rec) {
+                if (rec && typeof rec.index === 'number') state.comments.push(rec);
+            });
+        }
+    }
+
+    function handlePersistResponse(data) {
+        if (!data || typeof data !== 'object') return;
+        if (data.ok) {
+            if (data.attempt_id) state.attemptId = data.attempt_id;
+            if (data.saved && typeof data.saved.total_seconds === 'number') state.totalSeconds = data.saved.total_seconds;
+            if (data.initial && !state.resumeApplied) {
+                state.resumeApplied = true;
+                applyResume(data.initial);
+                state.entry = hasResumeData() ? 'resume' : 'ab-initio';
+            }
+        }
+    }
+
+    function hasResumeData() {
+        var s = state.scalars;
+        return (s['cmi.core.lesson_location'] || s['cmi.location'] || s['cmi.suspend_data']) ? true : false;
     }
 
     function persist(terminating) {
-        if (!initialized || PACKAGE_ID === 0) {
-            return Promise.resolve();
+        if (!state.initialized || PACKAGE_ID === 0) return Promise.resolve();
+        if (state.commitInFlight) {
+            state.pendingAfterCommit = state.pendingAfterCommit || { terminating: terminating };
+            return state.commitQueue;
         }
-        if (commitInFlight) {
-            // Queue a follow-up persist after the current one finishes
-            pendingAfterCommit = pendingAfterCommit || { terminating: terminating };
-            return commitQueue;
-        }
-        commitInFlight = true;
-        dirty = false;
+        state.commitInFlight = true;
+        state.dirty = false;
 
-        var payload = buildStatePayload(terminating);
+        var payload = buildPayload(terminating, false);
+        var previousPersistAt = state.lastPersistAt;
+        state.commitCount += 1;
 
         return fetch(API_ENDPOINT, {
             method: 'POST',
@@ -215,460 +616,219 @@
             body: JSON.stringify(payload)
         })
         .then(function (res) {
+            if (res.status === 409) {
+                return res.json().catch(function () { return {}; }).then(function (d) {
+                    // Duplicate request_id: 'committed' means the original
+                    // landed — treat as success. 'in progress' is transient.
+                    if (d && d.committed === true) {
+                        return { ok: true, attempt_id: state.attemptId };
+                    }
+                    return d;
+                });
+            }
             return res.json().catch(function () { return {}; });
         })
         .then(function (data) {
-            if (data && data.ok && data.attempt_id) {
-                attemptId = data.attempt_id;
-            }
-            if (data && data.initial && !initialState) {
-                initialState = data.initial;
-                // Hydrate values so GetValue returns stored state
-                applyInitialState(data.initial);
-            }
-            commitInFlight = false;
-            if (pendingAfterCommit) {
-                var p = pendingAfterCommit;
-                pendingAfterCommit = null;
+            handlePersistResponse(data);
+            state.commitInFlight = false;
+            state.pendingRequestId = null;
+            state.pendingDeltaMs = 0;
+            if (state.pendingAfterCommit) {
+                var p = state.pendingAfterCommit;
+                state.pendingAfterCommit = null;
                 return persist(p.terminating);
             }
         })
         .catch(function (err) {
-            console.warn('[SCORM-RTE] persist failed:', err);
-            commitInFlight = false;
-            // Re-mark dirty so a later commit retries
-            dirty = true;
+            // Preserve this payload's request_id + delta so the next attempt
+            // (usually the unload beacon) can deliver it exactly once.
+            state.pendingRequestId = payload.request_id;
+            state.pendingDeltaMs = payload.session_delta_ms;
+            state.lastPersistAt = previousPersistAt;
+            state.commitInFlight = false;
+            state.dirty = true;
+            logError('persist', null, err && err.message ? err.message : 'network error');
         });
     }
 
-    // Load the stored state synchronously during Initialize() so the very first
-    // GetValue('cmi.core.lesson_location' / 'cmi.suspend_data') returns the saved
-    // resume state. SCORM content expects a synchronous LMS - an async fetch can
-    // finish after the content has already read its values (which silently resets
-    // the course). Falls back to async persist if sync XHR is unavailable.
+    // Synchronous resume-state load during Initialize() so the very first
+    // GetValue() returns saved state (SCORM content expects a synchronous LMS).
     function loadInitialStateSync() {
         try {
             var xhr = new XMLHttpRequest();
             xhr.open('POST', API_ENDPOINT, false);
             xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.send(JSON.stringify(buildStatePayload(false)));
+            xhr.send(JSON.stringify(buildPayload(false, false)));
             if (xhr.status >= 200 && xhr.status < 300) {
                 var data = {};
                 try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
-                if (data && data.ok && data.attempt_id) attemptId = data.attempt_id;
-                if (data && data.initial) {
-                    initialState = data.initial;
-                    applyInitialState(data.initial);
-                }
+                handlePersistResponse(data);
+                if (state.resumeApplied) state.entry = hasResumeData() ? 'resume' : 'ab-initio';
+            } else if (xhr.status === 409) {
+                // Fresh request_id makes a duplicate impossible here; ignore
+                // transient 409s — the async persist path will retry.
             }
         } catch (e) {
             persist(false);
         }
     }
 
-    function applyInitialState(initial) {
-        if (!initial || typeof initial !== 'object') return;
-        // Values array: [{ element, value }]
-        if (Array.isArray(initial.values)) {
-            initial.values.forEach(function (v) {
-                if (v && v.element) lastValue[v.element] = v.value;
-            });
-        }
-        // Direct map form also supported
-        if (initial.map && typeof initial.map === 'object') {
-            Object.keys(initial.map).forEach(function (k) {
-                lastValue[k] = initial.map[k];
-            });
-        }
-    }
-
-    // ── Helpers ──
-    function setError(code) { lastError = String(code); }
-
-    function isReadable(el) { return READABLE[el] === 1; }
-    function isWritable(el) { return WRITABLE[el] === 1; }
-    function isArrayElement(el) {
-        return /\.\d+\./.test(el);
-    }
-
-    function normalize(el) {
-        // Trim + lowercase for lookup; but keep original case for storage
-        return String(el || '').trim();
-    }
-
-    function isValidElement(el) {
-        // Either in whitelist, or a numbered interaction/objective element
-        return READABLE[el] === 1 || WRITABLE[el] === 1 || isArrayElement(el);
-    }
-
-    // ── SCORM 1.2 API ──
+    // ── SCORM 1.2 adapter (window.API) ──
     var API12 = {
-        LMSInitialize: function (param) {
-            if (initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return 'false';
-            }
-            initialized = true;
+        LMSInitialize: function () {
+            if (state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
+            state.initialized = true;
+            state.terminated = false;
             setError(ERR.NO_ERROR);
-            // Load stored state synchronously so GetValue() returns resume data
-            // immediately after Initialize() (SCORM expects a synchronous LMS).
-            loadInitialStateSync();
+            try { loadInitialStateSync(); } catch (e) {}
             return 'true';
         },
-
-        LMSFinish: function (param) {
-            if (!initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return 'false';
-            }
-            terminated = true;
-            // Compute session_time if SCO didn't set it
-            if (!lastValue['cmi.core.session_time']) {
-                lastValue['cmi.core.session_time'] = formatDuration(Date.now() - sessionStartedAt);
-            }
-            // Commit the final state, then take the user out of the player.
-            persist(true).then(redirectToExit);
+        LMSFinish: function () {
+            if (!state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
+            terminate();
             setError(ERR.NO_ERROR);
             return 'true';
         },
-
-        LMSGetValue: function (element) {
-            if (!initialized && element !== 'cmi.core._children') {
-                setError(ERR.GENERAL_EXCEPTION);
-                return '';
-            }
-            var el = normalize(element);
-            var key = el;
-
-            if (!isReadable(key) && !isArrayElement(key)) {
-                setError(ERR.ELEMENT_NOT_READABLE);
-                return '';
-            }
-
-            // Children lists
-            if (key === 'cmi.core._children') {
-                setError(ERR.NO_ERROR);
-                return 'student_id,student_name,lesson_location,credit,lesson_status,entry,score,total_time,lesson_mode,exit,session_time';
-            }
-            if (key === 'cmi.student_data._children') {
-                setError(ERR.NO_ERROR);
-                return 'mastery_score,max_time_allowed,time_limit_action';
-            }
-            if (key === 'cmi.student_preference._children') {
-                setError(ERR.NO_ERROR);
-                return 'audio,language,speed,text';
-            }
-
-            // Score children
-            if (key === 'cmi.core.score._children') {
-                setError(ERR.NO_ERROR);
-                return 'raw,max,min';
-            }
-
-            // Computed total_time: session accumulation
-            if (key === 'cmi.core.total_time') {
-                var stored = lastValue['cmi.core.total_time'] || 'PT0H0M0S';
-                setError(ERR.NO_ERROR);
-                return stored;
-            }
-            if (key === 'cmi.core.session_time') {
-                var sv = lastValue['cmi.core.session_time'] || formatDuration(Date.now() - sessionStartedAt);
-                setError(ERR.NO_ERROR);
-                return sv;
-            }
-
-            // Student id/name are provided by the LMS session
-            if (key === 'cmi.core.student_id') {
-                setError(ERR.NO_ERROR);
-                return window.SCORM_USER && SCORM_USER.id ? SCORM_USER.id : '';
-            }
-            if (key === 'cmi.core.student_name') {
-                setError(ERR.NO_ERROR);
-                return window.SCORM_USER && SCORM_USER.name ? SCORM_USER.name : '';
-            }
-
-            var storedVal = lastValue[key];
-            setError(ERR.NO_ERROR);
-            return storedVal !== undefined ? String(storedVal) : '';
+        LMSGetValue: function (el) {
+            if (!state.initialized) { setError(ERR.GENERAL_EXCEPTION); return ''; }
+            var v = getValue(el);
+            return v === null ? '' : v;
         },
-
-        LMSSetValue: function (element, value) {
-            if (!initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return 'false';
-            }
-            var el = normalize(element);
-            var val = String(value);
-
-            if (!isWritable(el) && !isArrayElement(el)) {
-                setError(ERR.ELEMENT_NOT_WRITABLE);
-                return 'false';
-            }
-
-            // Validate session_time format
-            if (el === 'cmi.core.session_time' && !/^PT(\d+H)?(\d+M)?(\d+(\.\d+)?S)?$/.test(val)) {
-                setError(ERR.INVALID_ARGUMENT);
-                return 'false';
-            }
-            // Validate lesson_status values
-            if (el === 'cmi.core.lesson_status') {
-                var validStatus = ['passed', 'completed', 'failed', 'incomplete', 'browsed', 'not attempted'];
-                if (validStatus.indexOf(val) === -1) {
-                    setError(ERR.INVALID_ARGUMENT);
-                    return 'false';
-                }
-            }
-
-            lastValue[el] = val;
-            dirty = true;
-            setError(ERR.NO_ERROR);
-
-            // Coalesce rapid writes — persist shortly after the last write
-            if (coalesceTimer) clearTimeout(coalesceTimer);
-            coalesceTimer = setTimeout(function () {
-                if (dirty) persist(false);
-            }, 2000);
-
-            return 'true';
+        LMSSetValue: function (el, val) {
+            if (!state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
+            return setValue(el, val) ? 'true' : 'false';
         },
-
-        LMSCommit: function (param) {
-            if (!initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return 'false';
-            }
+        LMSCommit: function () {
+            if (!state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
             persist(false);
             setError(ERR.NO_ERROR);
             return 'true';
         },
-
-        LMSGetLastError: function () { return lastError; },
-
-        LMSGetErrorString: function (code) {
-            var map = {
-                '0': 'No error', '101': 'General exception', '201': 'Invalid argument',
-                '202': 'Element cannot be accessed', '203': 'Element cannot be written to',
-                '204': 'Element cannot be read from'
-            };
-            return map[String(code)] || 'Unknown error';
-        },
-
-        LMSGetDiagnostic: function (code) {
-            return this.LMSGetErrorString(code);
-        }
+        LMSGetLastError: function () { return state.lastError; },
+        LMSGetErrorString: function (code) { return ERRSTR[String(code)] || 'Unknown error'; },
+        LMSGetDiagnostic: function (code) { return ERRSTR[String(code)] || 'Unknown error'; },
+        // Some exporters probe the 2004-style method names on the 1.2 object.
+        Initialize: function () { return this.LMSInitialize(); },
+        Terminate: function () { return this.LMSFinish(); },
+        GetValue: function (el) { return this.LMSGetValue(el); },
+        SetValue: function (el, val) { return this.LMSSetValue(el, val); },
+        Commit: function () { return this.LMSCommit(); },
+        GetLastError: function () { return this.LMSGetLastError(); },
+        GetErrorString: function (c) { return this.LMSGetErrorString(c); },
+        GetDiagnostic: function (c) { return this.LMSGetDiagnostic(c); }
     };
 
-    // ── SCORM 2004 API ──
+    // ── SCORM 2004 adapter (window.API_1484_11) ──
     var API2004 = {
         Initialize: function () {
-            if (initialized) {
-                setError(ERR.INITIALIZATION_FAILED);
-                return 'false';
-            }
-            initialized = true;
+            if (state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
+            state.initialized = true;
+            state.terminated = false;
             setError(ERR.NO_ERROR);
-            // Load stored state synchronously so GetValue() returns resume data
-            // immediately after Initialize() (SCORM expects a synchronous LMS).
-            loadInitialStateSync();
+            try { loadInitialStateSync(); } catch (e) {}
             return 'true';
         },
-
         Terminate: function () {
-            if (!initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return 'false';
-            }
-            terminated = true;
-            if (!lastValue['cmi.session_time']) {
-                lastValue['cmi.session_time'] = formatDuration(Date.now() - sessionStartedAt);
-            }
-            // Commit the final state, then take the user out of the player.
-            persist(true).then(redirectToExit);
+            if (!state.initialized) { setError(ERR.INITIALIZATION_FAILED); return 'false'; }
+            terminate();
             setError(ERR.NO_ERROR);
             return 'true';
         },
-
-        GetValue: function (element) {
-            if (!initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return '';
-            }
-            var el = normalize(element);
-
-            if (!READABLE[el] && el !== 'cmi._version') {
-                setError(ERR.ELEMENT_NOT_READABLE);
-                return '';
-            }
-
-            if (el === 'cmi._version') { setError(ERR.NO_ERROR); return '1.0'; }
-            if (el === 'cmi.learner_id') {
-                setError(ERR.NO_ERROR);
-                return window.SCORM_USER && SCORM_USER.id ? SCORM_USER.id : '';
-            }
-            if (el === 'cmi.learner_name') {
-                setError(ERR.NO_ERROR);
-                return window.SCORM_USER && SCORM_USER.name ? SCORM_USER.name : '';
-            }
-            if (el.indexOf('cmi.interactions._count') === 0) {
-                var c = 0;
-                for (var k in lastValue) {
-                    if (/^cmi\.interactions\.\d+\.id$/.test(k)) c++;
-                }
-                setError(ERR.NO_ERROR);
-                return String(c);
-            }
-            if (el.indexOf('cmi.objectives._count') === 0) {
-                var o = 0;
-                for (var k2 in lastValue) {
-                    if (/^cmi\.objectives\.\d+\.id$/.test(k2)) o++;
-                }
-                setError(ERR.NO_ERROR);
-                return String(o);
-            }
-            if (el === 'cmi.total_time' || el === 'cmi.session_time') {
-                var v = lastValue[el] || formatDuration(Date.now() - sessionStartedAt);
-                setError(ERR.NO_ERROR);
-                return v;
-            }
-
-            var sv = lastValue[el];
-            setError(ERR.NO_ERROR);
-            return sv !== undefined ? String(sv) : '';
+        GetValue: function (el) {
+            if (!state.initialized) { setError(ERR.INITIALIZATION_FAILED); return ''; }
+            var v = getValue(el);
+            return v === null ? '' : v;
         },
-
-        SetValue: function (element, value) {
-            if (!initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return 'false';
-            }
-            var el = normalize(element);
-            var val = String(value);
-
-            if (!WRITABLE[el]) {
-                setError(ERR.ELEMENT_NOT_WRITABLE);
-                return 'false';
-            }
-
-            // Validate completion_status
-            if (el === 'cmi.completion_status') {
-                var vs = ['completed', 'incomplete', 'not attempted', 'unknown'];
-                if (vs.indexOf(val) === -1) { setError(ERR.INVALID_ARGUMENT); return 'false'; }
-            }
-            if (el === 'cmi.success_status') {
-                var vss = ['passed', 'failed', 'unknown'];
-                if (vss.indexOf(val) === -1) { setError(ERR.INVALID_ARGUMENT); return 'false'; }
-            }
-            if (el === 'cmi.exit') {
-                var ve = ['normal', 'suspend', 'logout', 'time-out'];
-                if (ve.indexOf(val) === -1) { setError(ERR.INVALID_ARGUMENT); return 'false'; }
-            }
-            if (el === 'cmi.session_time' && !/^PT(\d+H)?(\d+M)?(\d+(\.\d+)?S)?$/.test(val)) {
-                setError(ERR.INVALID_ARGUMENT);
-                return 'false';
-            }
-
-            lastValue[el] = val;
-            dirty = true;
-            setError(ERR.NO_ERROR);
-
-            if (coalesceTimer) clearTimeout(coalesceTimer);
-            coalesceTimer = setTimeout(function () {
-                if (dirty) persist(false);
-            }, 2000);
-
-            return 'true';
+        SetValue: function (el, val) {
+            if (!state.initialized) { setError(ERR.INITIALIZATION_FAILED); return 'false'; }
+            return setValue(el, val) ? 'true' : 'false';
         },
-
         Commit: function () {
-            if (!initialized) {
-                setError(ERR.GENERAL_EXCEPTION);
-                return 'false';
-            }
+            if (!state.initialized) { setError(ERR.INITIALIZATION_FAILED); return 'false'; }
             persist(false);
             setError(ERR.NO_ERROR);
             return 'true';
         },
-
-        GetLastError: function () { return lastError; },
-
-        GetErrorString: function (code) {
-            var map = {
-                '0': 'No error', '101': 'General exception', '102': 'Initialization failed',
-                '301': 'Invalid argument', '351': 'Element is not available'
-            };
-            return map[String(code)] || 'Unknown error';
-        },
-
-        GetDiagnostic: function (code) {
-            return this.GetErrorString(code);
-        }
+        GetLastError: function () { return state.lastError; },
+        GetErrorString: function (code) { return ERRSTR[String(code)] || 'Unknown error'; },
+        GetDiagnostic: function (code) { return ERRSTR[String(code)] || 'Unknown error'; }
     };
 
-    // ── Navigate the TOP window out of the SCORM player on exit ──
-    // Storyline 360's "Exit Course" trigger, after calling LMSFinish()/
-    // Terminate(), tries to open the exit URL in a frame — which either gets
-    // blocked by X-Frame-Options or produces a nested-iframe mess. We take
-    // over the navigation ourselves: once the final commit has resolved,
-    // redirect the TOP window so the user actually leaves the player.
-    // Using window.top.location.href navigates the entire browser window
-    // (not a sub-frame), so the exit URL never gets loaded inside the iframe.
-    function redirectToExit() {
-        var url = EXIT_URL;
-        try {
-            if (window.top && window.top !== window.self) {
-                // We are inside the SCORM iframe — navigate the parent window.
-                window.top.location.href = url;
-            } else {
-                // Not framed (e.g. opened directly) — navigate ourselves.
-                window.location.href = url;
-            }
-        } catch (e) {
-            // Cross-origin top access is blocked — fall back to same-frame nav.
-            try { window.location.href = url; } catch (e2) {}
+    // ── Session lifecycle ──
+    function terminate() {
+        if (!state.initialized) return;
+        // Idempotent: repeated Terminate()/unload pairs never double-persist
+        // time (the unload beacon computes a ~0 delta after this persist).
+        if (state.terminated) return;
+        state.terminated = true;
+        if (state.scalars['cmi.core.session_time'] === undefined && state.scalars['cmi.session_time'] === undefined) {
+            var key = is2004() ? 'cmi.session_time' : 'cmi.core.session_time';
+            state.scalars[key] = formatDuration(Date.now() - state.sessionStartedAt);
         }
+        persist(true);
     }
 
-    // ── Install API objects into the page ──
-    function install() {
-        // Expose BOTH APIs. Rise 360 / Storyline packages may probe either
-        // window.API (SCORM 1.2) or window.API_1484_11 (SCORM 2004). If only
-        // one is exposed and the course probes the other, it never finds the
-        // API, never calls Initialize(), and tracking silently records nothing
-        // (progress stays 0%).
-        if (!window.API) window.API = API12;
-        if (!window.API_1484_11) window.API_1484_11 = API2004;
-    }
-
-    install();
-
-    // ── Persist on unload (best-effort final save) ──
     function handleUnload() {
-        if (!initialized || terminated) return;
-        terminated = true;
-        var key = is2004 ? 'cmi.session_time' : 'cmi.core.session_time';
-        if (!lastValue[key]) {
-            lastValue[key] = formatDuration(Date.now() - sessionStartedAt);
-        }
-        // navigator.sendBeacon is more reliable on unload than fetch
+        if (!state.initialized) return;
+        // Terminate() may have already persisted; the delta mechanism makes
+        // this beacon safe (≈0ms) — but a beacon still fires so a final
+        // state lands even when Terminate's fetch was aborted by the browser.
+        state.terminated = true;
+        var payload = buildPayload(true, true); // reuse a failed persist's request_id
         if (navigator.sendBeacon) {
-            var blob = new Blob([JSON.stringify(buildStatePayload(true))], {
-                type: 'application/json'
-            });
-            navigator.sendBeacon(API_ENDPOINT, blob);
+            try {
+                // Plain string body: sendBeacon sends it as text/plain; the
+                // server json_decodes php://input regardless of content type.
+                navigator.sendBeacon(API_ENDPOINT, JSON.stringify(payload));
+            } catch (e) {
+                persist(true);
+            }
         } else {
             persist(true);
         }
     }
+
+    // Take over exit navigation (Storyline frames the exit URL otherwise).
+    function redirectToExit() {
+        try {
+            if (window.top && window.top !== window.self) {
+                window.top.location.href = EXIT_URL;
+            } else {
+                window.location.href = EXIT_URL;
+            }
+        } catch (e) {
+            try { window.location.href = EXIT_URL; } catch (e2) {}
+        }
+    }
+
+    function install() {
+        if (!window.API) window.API = API12;
+        if (!window.API_1484_11) window.API_1484_11 = API2004;
+    }
+    install();
+
     window.addEventListener('beforeunload', handleUnload);
     // SCORM 1.2 packages sometimes use window.onunload
     window.onunload = handleUnload;
 
-    // Expose internals for debugging
+    // Expose diagnostics for the player's admin panel and debugging.
     window.__SCORM_RTE__ = {
+        rteVersion: RTE_VERSION,
         version: SCORM_VERSION,
-        initialized: function () { return initialized; },
-        getState: function () { return lastValue; },
-        getAttemptId: function () { return attemptId; }
+        edition: SCORM_EDITION,
+        suspendLimit: SUSPEND_LIMIT,
+        initialized: function () { return state.initialized; },
+        terminated: function () { return state.terminated; },
+        getState: function () { return state.scalars; },
+        getAttemptId: function () { return state.attemptId; },
+        getCommitCount: function () { return state.commitCount; },
+        getInteractionCount: function () { return Object.keys(state.interactions).length; },
+        getObjectiveCount: function () { return Object.keys(state.objectives).length; },
+        getCommentCount: function () { return state.comments.length; },
+        getSuspendDataLength: function () { return (state.scalars['cmi.suspend_data'] || '').length; },
+        getErrors: function () { return state.errors.slice(); },
+        getLastError: function () { return state.lastError; },
+        entry: function () { return state.entry; }
     };
 
 })();

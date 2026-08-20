@@ -4,7 +4,9 @@
  * Reset Password Controller
  */
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/includes/security.php';
 ensureUserColumns();
+ensureSecurityTables();
 
 // 1. CONFIGURATION
 
@@ -21,7 +23,7 @@ try {
     }
 
     // 2. VALIDATE TOKEN
-    $stmt = $pdo->prepare("SELECT id FROM users WHERE reset_token = ? AND reset_expiry > NOW()");
+    $stmt = $pdo->prepare("SELECT id, role FROM users WHERE reset_token = ? AND reset_expiry > NOW()");
     $stmt->execute([$token]);
     $user = $stmt->fetch();
 
@@ -40,16 +42,19 @@ try {
         if ($new_password !== $confirm_password) {
             $message = "Passwords do not match.";
             $message_type = "error";
-        } elseif (strlen($new_password) < 8) {
-            $message = "Password must be at least 8 characters.";
-            $message_type = "error";
         } else {
-            $hash = password_hash($new_password, PASSWORD_DEFAULT);
-            $update = $pdo->prepare("UPDATE users SET password_hash = ?, reset_token = NULL, reset_expiry = NULL WHERE id = ?");
-            $update->execute([$hash, $user['id']]);
-            
-            // Redirect to login with success message
-            redirectTo('login/?msg=updated');
+            $policy = validatePasswordPolicy($new_password, $user['role'] ?? 'student');
+            if (!$policy['ok']) {
+                $message = $policy['error'];
+                $message_type = "error";
+            } else {
+                $hash = password_hash($new_password, PASSWORD_DEFAULT);
+                $update = $pdo->prepare("UPDATE users SET password_hash = ?, reset_token = NULL, reset_expiry = NULL WHERE id = ?");
+                $update->execute([$hash, $user['id']]);
+
+                logSecurityEvent('password_changed', 'info', ['reason' => 'reset'], (int)$user['id'], '');
+                redirectTo('login/?msg=updated');
+            }
         }
     }
 

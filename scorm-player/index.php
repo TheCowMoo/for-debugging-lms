@@ -96,6 +96,8 @@ error_log('[SCORM-PLAYER] serve.php exists on disk: ' . ($serveFileExists ? 'YES
 
 // ── S3 availability check for debug overlay ──
 $s3Configured = isS3Configured();
+// Admin post-launch diagnostics panel (RTE telemetry) — opt-in via ?diag=1.
+$showDiag = isAdmin() && !empty($_GET['diag']);
 $debugInfo = json_encode([
     'pkg'          => $packageId,
     'sco'          => $scoId,
@@ -105,6 +107,7 @@ $debugInfo = json_encode([
     'serveExists'  => $serveFileExists,
     'user'         => $currentUser['email'] ?? '?',
     'token'        => substr($serveToken, 0, 12) . '...',
+    'showDiag'     => $showDiag,
 ]);
 ?>
 <!DOCTYPE html>
@@ -298,6 +301,65 @@ $debugInfo = json_encode([
         }
         .debug-overlay .raw-details.visible { display: block; }
 
+        /* ── Admin post-launch diagnostics panel ── */
+        .diag-panel {
+            display: none;
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            width: 420px;
+            max-width: calc(100vw - 40px);
+            max-height: 70vh;
+            overflow-y: auto;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #444;
+            border-radius: 12px;
+            padding: 18px 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            z-index: 9999;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+        }
+        .diag-panel.visible { display: block; }
+        .diag-panel h3 {
+            margin: 0 0 10px;
+            color: #82ACD6;
+            font-size: 0.9rem;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+        .diag-panel .diag-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 4px 0;
+            border-bottom: 1px solid #333;
+        }
+        .diag-panel .diag-row .k { color: #9ca3af; }
+        .diag-panel .diag-row .v { color: #7ee787; word-break: break-all; text-align: right; }
+        .diag-panel .diag-err {
+            color: #ff7b72;
+            padding: 4px 0;
+            border-bottom: 1px solid #333;
+            word-break: break-all;
+        }
+        .diag-panel .diag-toggle {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            z-index: 10000;
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: none;
+            background: #232D63;
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+            display: none;
+        }
+        .diag-panel.visible + .diag-toggle { display: none; }
+
         @media (max-width: 768px) {
             .player-bar .learner-name { display: none; }
             .player-bar .course-title { max-width: 65%; }
@@ -354,6 +416,15 @@ $debugInfo = json_encode([
                 allowfullscreen
                 referrerpolicy="no-referrer-when-downgrade"></iframe>
     </div>
+
+    <?php if ($showDiag): ?>
+    <!-- ── Admin post-launch diagnostics panel (reads window.__SCORM_RTE__) ── -->
+    <button class="diag-toggle" id="diagToggle" onclick="toggleDiag()">SCORM Diagnostics</button>
+    <div class="diag-panel" id="diagPanel">
+        <h3>SCORM RTE Telemetry</h3>
+        <div id="diagBody"><div class="diag-row"><span class="k">waiting for runtime…</span></div></div>
+    </div>
+    <?php endif; ?>
 
     <script>
     (function () {
@@ -583,6 +654,77 @@ $debugInfo = json_encode([
         window.toggleDetails = function () {
             rawDetails.classList.toggle('visible');
         };
+
+        <?php if ($showDiag): ?>
+        // ── Admin diagnostics panel: poll the RTE inside the iframe ──
+        // Same-origin (serve.php), so contentWindow.__SCORM_RTE__ is readable
+        // directly. Shows API used, runtime version, commits, statuses, scores,
+        // interaction/objective/comment counts, suspend-data length, and errors.
+        var diagPanel = document.getElementById('diagPanel');
+        var diagBody = document.getElementById('diagBody');
+        var diagToggle = document.getElementById('diagToggle');
+
+        window.toggleDiag = function () {
+            diagPanel.classList.toggle('visible');
+        };
+
+        function escDiag(v) {
+            return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, function (ch) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+            });
+        }
+
+        function refreshDiag() {
+            var rte = null;
+            try {
+                if (frame.contentWindow && frame.contentWindow.__SCORM_RTE__) {
+                    rte = frame.contentWindow.__SCORM_RTE__;
+                }
+            } catch (e) { /* cross-origin or not ready */ }
+
+            if (!rte) {
+                diagBody.innerHTML = '<div class="diag-row"><span class="k">runtime not initialised yet…</span></div>';
+                return;
+            }
+
+            var state = rte.getState() || {};
+            var errs = (rte.getErrors() || []).slice(-10);
+            var rows = [
+                ['Standard (API)', escDiag(rte.version === '2004' ? 'SCORM 2004 (API_1484_11)' : 'SCORM 1.2 (API)')],
+                ['Edition', escDiag(rte.edition || 'unknown')],
+                ['RTE version', escDiag(rte.rteVersion)],
+                ['Suspend limit', escDiag(rte.suspendLimit)],
+                ['Initialized', escDiag(rte.initialized ? rte.initialized() : '?')],
+                ['Attempt ID', escDiag(rte.getAttemptId ? rte.getAttemptId() : '')],
+                ['Commits', escDiag(rte.getCommitCount ? rte.getCommitCount() : '')],
+                ['lesson_status', escDiag(state['cmi.core.lesson_status'] || '')],
+                ['completion_status', escDiag(state['cmi.completion_status'] || '')],
+                ['success_status', escDiag(state['cmi.success_status'] || '')],
+                ['score.raw', escDiag(state['cmi.core.score.raw'] || state['cmi.score.raw'] || '')],
+                ['score.scaled', escDiag(state['cmi.score.scaled'] || '')],
+                ['progress', escDiag(state['cmi.progress_measure'] || '')],
+                ['location', escDiag(state['cmi.core.lesson_location'] || state['cmi.location'] || '')],
+                ['Interactions', escDiag(rte.getInteractionCount ? rte.getInteractionCount() : '')],
+                ['Objectives', escDiag(rte.getObjectiveCount ? rte.getObjectiveCount() : '')],
+                ['Comments', escDiag(rte.getCommentCount ? rte.getCommentCount() : '')],
+                ['suspend_data length', escDiag(rte.getSuspendDataLength ? rte.getSuspendDataLength() : '')],
+                ['Last error', escDiag(rte.getLastError ? rte.getLastError() : '')]
+            ];
+            var html = rows.map(function (r) {
+                return '<div class="diag-row"><span class="k">' + r[0] + '</span><span class="v">' + r[1] + '</span></div>';
+            }).join('');
+            if (errs.length > 0) {
+                html += '<h3 style="margin-top:12px">RTE Errors</h3>';
+                html += errs.map(function (e) {
+                    return '<div class="diag-err">' + escDiag(e.type + ' ' + (e.element || '') + ': ' + e.message) + '</div>';
+                }).join('');
+            }
+            diagBody.innerHTML = html;
+        }
+
+        setInterval(refreshDiag, 2000);
+        refreshDiag();
+        <?php endif; ?>
 
     })();
     </script>

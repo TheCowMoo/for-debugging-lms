@@ -39,6 +39,7 @@ function isActive(string $path): string {
         ?>
             <div class="nav-section-label" style="color: var(--admin-accent);">Admin Controls</div>
             <a href="<?php echo buildUrl('user-management'); ?>" class="nav-link admin-link<?php echo isActive('/user-management'); ?>" data-tour="tour-users">User Management</a>
+            <a href="<?php echo buildUrl('user-management/security-audit.php'); ?>" class="nav-link admin-link<?php echo isActive('/user-management/security-audit'); ?>" data-tour="tour-security-audit">Security Audit</a>
             <a href="<?php echo buildUrl('admin-progress'); ?>" class="nav-link admin-link<?php echo isActive('/admin-progress'); ?>" data-tour="tour-admin-progress">Admin Progress</a>
             <a href="<?php echo buildUrl('analytics/organization'); ?>" class="nav-link admin-link<?php echo isActive('/analytics/organization'); ?>" data-tour="org-analytics">Org Analytics</a>
             <a href="<?php echo buildUrl('admin-course-manager'); ?>" class="nav-link admin-link<?php echo isActive('/admin-course-manager'); ?>" data-tour="scorm-packages">Course Manager</a>
@@ -50,6 +51,8 @@ function isActive(string $path): string {
         <?php endif; ?>
         <div class="nav-section-label">Support</div>
         <a href="<?php echo buildUrl('support'); ?>" class="nav-link<?php echo isActive('/support'); ?>" data-tour="tour-support">Support</a>
+        <div class="nav-section-label">Account</div>
+        <a href="<?php echo buildUrl('settings'); ?>" class="nav-link<?php echo isActive('/settings'); ?>" data-tour="tour-settings">Settings</a>
     </div>
     <a href="<?php echo buildUrl('logout.php'); ?>" class="logout">Log Out</a>
 </nav>

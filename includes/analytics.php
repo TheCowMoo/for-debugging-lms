@@ -67,6 +67,19 @@ if (!function_exists('getOrganizationOverview')) {
             $sql = "SELECT
                         COUNT(*) AS total,
                         SUM(CASE WHEN sa.is_complete = 1 THEN 1 ELSE 0 END) AS completed,
+                        SUM(CASE
+                            WHEN sa.normalized_completion IN ('completed') THEN 1
+                            WHEN sa.normalized_completion = '' AND (
+                                LOWER(COALESCE(sa.lesson_status,'')) IN ('completed','passed') OR
+                                LOWER(COALESCE(sa.completion_status,'')) IN ('completed','passed')
+                            ) THEN 1 ELSE 0 END) AS completed_signal,
+                        SUM(CASE
+                            WHEN sa.normalized_success IN ('passed') THEN 1
+                            WHEN sa.normalized_success = '' AND (
+                                LOWER(COALESCE(sa.lesson_status,'')) = 'passed' OR
+                                LOWER(COALESCE(sa.success_status,'')) = 'passed'
+                            ) THEN 1 ELSE 0 END) AS passed_signal,
+                        SUM(CASE WHEN COALESCE(sa.lesson_status,'') = '' AND COALESCE(sa.completion_status,'') = '' AND COALESCE(sa.success_status,'') = '' THEN 1 ELSE 0 END) AS no_signal,
                         ROUND(AVG(CASE WHEN sa.score_raw IS NOT NULL THEN sa.score_raw END), 1) AS avg_score,
                         COALESCE(SUM(sa.total_time_seconds), 0) AS seconds,
                         COUNT(DISTINCT sa.package_id) AS course_count
@@ -74,7 +87,9 @@ if (!function_exists('getOrganizationOverview')) {
                     WHERE 1=1" . $scope['sql'];
             $row = $pdo->query($sql)->fetch(PDO::FETCH_ASSOC);
             $enroll = (int)($row['total'] ?? 0);
-            $completed = (int)($row['completed'] ?? 0);
+            $completed = (int)($row['completed_signal'] ?? 0);
+            $passed = (int)($row['passed_signal'] ?? 0);
+            $noSignal = (int)($row['no_signal'] ?? 0);
             $scoreSum = (float)($row['avg_score'] ?? 0);
             $scoreCount = $row['avg_score'] !== null ? 1 : 0;
             $seconds = (int)($row['seconds'] ?? 0);
@@ -84,9 +99,15 @@ if (!function_exists('getOrganizationOverview')) {
         }
 
         return [
-            'total_learners'    => $learners,
+            'total_learners'     => $learners,
             'active_enrollments' => $enroll,
             'completion_rate'    => $enroll > 0 ? round(($completed / $enroll) * 100, 1) : 0,
+            // Pass rate is SEPARATE from completion rate. SCORM 1.2 derives
+            // success from lesson_status (never claimed as a native signal);
+            // SCORM 2004 reports success_status natively.
+            'pass_rate'          => $enroll > 0 ? round(($passed / $enroll) * 100, 1) : 0,
+            'not_reported'       => $noSignal,
+            'not_reported_pct'   => $enroll > 0 ? round(($noSignal / $enroll) * 100, 1) : 0,
             'avg_score'          => $scoreCount > 0 ? $scoreSum : null,
             'total_hours'        => (int)round($seconds / 3600),
             'course_count'       => $courses,
@@ -798,5 +819,280 @@ if (!function_exists('getSlideTimeBreakdown')) {
             'summary'         => $summary,
             'has_data'        => $attemptsParsed > 0 && count($slides) > 0,
         ];
+    }
+}
+
+if (!function_exists('analyticsV2Enabled')) {
+    /**
+     * Feature flag for the cross-version analytics dashboards (section 7).
+     * Enable by setting ANALYTICS_V2=1 in .env.
+     */
+    function analyticsV2Enabled(): bool
+    {
+        return getenv('ANALYTICS_V2') === '1';
+    }
+}
+
+if (!function_exists('getCompletionPassRates')) {
+    /**
+     * Completion vs pass rate per package.
+     *
+     * Grain: LATEST attempt per (user, package, sco). Completion and pass are
+     * reported separately (SCORM 1.2 success is derived from lesson_status;
+     * SCORM 2004 success is a native success_status). "Not reported" (no
+     * status signal at all) is a distinct bucket from explicit 'incomplete'.
+     */
+    function getCompletionPassRates(int $limit = 100): array
+    {
+        $pdo = getDbConnection();
+        $scope = analyticsOrgScope('sa');
+        $rows = [];
+        try {
+            $sql = "SELECT sp.id AS package_id, sp.title, sp.scorm_version, sp.scorm_edition,
+                        COUNT(*) AS attempts,
+                        COUNT(DISTINCT sa.user_id) AS learners,
+                        SUM(CASE
+                            WHEN sa.normalized_completion IN ('completed') THEN 1
+                            WHEN sa.normalized_completion = '' AND (
+                                LOWER(COALESCE(sa.lesson_status,'')) IN ('completed','passed') OR
+                                LOWER(COALESCE(sa.completion_status,'')) IN ('completed','passed')
+                            ) THEN 1 ELSE 0 END) AS completed,
+                        SUM(CASE
+                            WHEN sa.normalized_success IN ('passed') THEN 1
+                            WHEN sa.normalized_success = '' AND (
+                                LOWER(COALESCE(sa.lesson_status,'')) = 'passed' OR
+                                LOWER(COALESCE(sa.success_status,'')) = 'passed'
+                            ) THEN 1 ELSE 0 END) AS passed,
+                        SUM(CASE WHEN COALESCE(sa.lesson_status,'') = '' AND COALESCE(sa.completion_status,'') = '' AND COALESCE(sa.success_status,'') = '' THEN 1 ELSE 0 END) AS no_signal
+                    FROM (
+                        SELECT MAX(id) AS id FROM scorm_attempts
+                        GROUP BY user_id, package_id, sco_item_id
+                    ) latest
+                    JOIN scorm_attempts sa ON sa.id = latest.id
+                    JOIN scorm_packages sp ON sp.id = sa.package_id
+                    WHERE sp.status = 'active'" . $scope['sql'] . "
+                    GROUP BY sp.id, sp.title, sp.scorm_version, sp.scorm_edition
+                    ORDER BY sp.title
+                    LIMIT " . (int)$limit;
+            $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                $total = max(1, (int)$r['attempts']);
+                $r['completed_pct'] = round(((int)$r['completed'] / $total) * 100, 1);
+                $r['passed_pct']    = round(((int)$r['passed'] / $total) * 100, 1);
+                $r['no_signal_pct'] = round(((int)$r['no_signal'] / $total) * 100, 1);
+            }
+            unset($r);
+        } catch (PDOException $e) {
+            error_log('[ANALYTICS] completionPassRates: ' . $e->getMessage());
+        }
+        return $rows;
+    }
+}
+
+if (!function_exists('getInteractionAccuracy')) {
+    /**
+     * Interaction accuracy + average response latency per question.
+     * Scope via scorm_attempts (interactions carry no org column).
+     */
+    function getInteractionAccuracy(?int $packageId = null, int $limit = 200): array
+    {
+        $pdo = getDbConnection();
+        $scope = analyticsOrgScope('sa');
+        $params = [];
+        $pkgSql = '';
+        if ($packageId !== null && $packageId > 0) {
+            $pkgSql = ' AND sa.package_id = ?';
+            $params[] = $packageId;
+        }
+        try {
+            $sql = "SELECT si.interaction_id, si.interaction_type,
+                        COUNT(*) AS attempts,
+                        SUM(CASE WHEN LOWER(COALESCE(si.result,'')) IN ('correct','pass','passed') THEN 1 ELSE 0 END) AS correct,
+                        ROUND(AVG(NULLIF(si.latency_seconds, 0)), 2) AS avg_latency_s,
+                        SUM(CASE WHEN si.latency_seconds IS NOT NULL AND si.latency_seconds > 0 THEN 1 ELSE 0 END) AS latency_reported
+                    FROM scorm_interactions si
+                    JOIN scorm_attempts sa ON sa.id = si.attempt_id
+                    WHERE si.interaction_id <> ''" . $scope['sql'] . $pkgSql . "
+                    GROUP BY si.interaction_id, si.interaction_type
+                    ORDER BY attempts DESC
+                    LIMIT " . (int)$limit;
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                $total = max(1, (int)$r['attempts']);
+                $r['accuracy_pct'] = round(((int)$r['correct'] / $total) * 100, 1);
+            }
+            unset($r);
+            return $rows;
+        } catch (PDOException $e) {
+            error_log('[ANALYTICS] interactionAccuracy: ' . $e->getMessage());
+            return [];
+        }
+    }
+}
+
+if (!function_exists('getScoreDistribution')) {
+    /**
+     * Score distribution for latest attempts. 'not_reported' (NULL score) is
+     * a distinct bucket from an explicit zero score.
+     */
+    function getScoreDistribution(?int $packageId = null): array
+    {
+        $pdo = getDbConnection();
+        $scope = analyticsOrgScope('sa');
+        $params = [];
+        $pkgSql = '';
+        if ($packageId !== null && $packageId > 0) {
+            $pkgSql = ' AND sa.package_id = ?';
+            $params[] = $packageId;
+        }
+        try {
+            $sql = "SELECT
+                        CASE
+                            WHEN sa.score_raw IS NULL AND sa.score_scaled IS NULL THEN 'not_reported'
+                            WHEN sa.score_raw < 10 THEN '0-9'
+                            WHEN sa.score_raw < 20 THEN '10-19'
+                            WHEN sa.score_raw < 30 THEN '20-29'
+                            WHEN sa.score_raw < 40 THEN '30-39'
+                            WHEN sa.score_raw < 50 THEN '40-49'
+                            WHEN sa.score_raw < 60 THEN '50-59'
+                            WHEN sa.score_raw < 70 THEN '60-69'
+                            WHEN sa.score_raw < 80 THEN '70-79'
+                            WHEN sa.score_raw < 90 THEN '80-89'
+                            WHEN sa.score_raw < 100 THEN '90-99'
+                            WHEN sa.score_raw <= 100 THEN '100'
+                            ELSE 'raw_gt_100'
+                        END AS bucket,
+                        COUNT(*) AS n
+                    FROM (
+                        SELECT MAX(id) AS id FROM scorm_attempts
+                        GROUP BY user_id, package_id, sco_item_id
+                    ) latest
+                    JOIN scorm_attempts sa ON sa.id = latest.id
+                    WHERE 1=1" . $scope['sql'] . $pkgSql . "
+                    GROUP BY bucket
+                    ORDER BY MIN(CASE WHEN sa.score_raw IS NULL AND sa.score_scaled IS NULL THEN -1 ELSE COALESCE(sa.score_raw, sa.score_scaled * 100) END)";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            error_log('[ANALYTICS] scoreDistribution: ' . $e->getMessage());
+            return [];
+        }
+    }
+}
+
+if (!function_exists('getObjectiveQuestionAnalysis')) {
+    /**
+     * Objective-to-question analysis using the scorm_interaction_objectives
+     * junction table (cmi.interactions.n.objectives.m.id).
+     */
+    function getObjectiveQuestionAnalysis(?int $packageId = null, int $limit = 200): array
+    {
+        $pdo = getDbConnection();
+        $scope = analyticsOrgScope('sa');
+        $params = [];
+        $pkgSql = '';
+        if ($packageId !== null && $packageId > 0) {
+            $pkgSql = ' AND sa.package_id = ?';
+            $params[] = $packageId;
+        }
+        try {
+            $sql = "SELECT sio.objective_id,
+                        COUNT(DISTINCT sio.interaction_index) AS linked_interactions,
+                        COUNT(*) AS link_count
+                    FROM scorm_interaction_objectives sio
+                    JOIN scorm_attempts sa ON sa.id = sio.attempt_id
+                    WHERE sio.objective_id <> ''" . $scope['sql'] . $pkgSql . "
+                    GROUP BY sio.objective_id
+                    ORDER BY link_count DESC
+                    LIMIT " . (int)$limit;
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            error_log('[ANALYTICS] objectiveQuestion: ' . $e->getMessage());
+            return [];
+        }
+    }
+}
+
+if (!function_exists('getTelemetryCompleteness')) {
+    /**
+     * Package telemetry completeness: status, score, time, progress,
+     * interactions, objectives, suspend-data coverage across attempts.
+     */
+    function getTelemetryCompleteness(int $limit = 100): array
+    {
+        $pdo = getDbConnection();
+        $scope = analyticsOrgScope('sa');
+        $rows = [];
+        try {
+            $sql = "SELECT sp.id AS package_id, sp.title, sp.scorm_version, sp.scorm_edition,
+                        COUNT(*) AS attempts,
+                        SUM(CASE WHEN COALESCE(sa.lesson_status,'') <> '' OR COALESCE(sa.completion_status,'') <> '' OR COALESCE(sa.success_status,'') <> '' THEN 1 ELSE 0 END) AS status_reported,
+                        SUM(CASE WHEN sa.score_raw IS NOT NULL OR sa.score_scaled IS NOT NULL THEN 1 ELSE 0 END) AS score_reported,
+                        SUM(CASE WHEN sa.total_time_seconds > 0 THEN 1 ELSE 0 END) AS time_reported,
+                        SUM(CASE WHEN sa.progress_measure IS NOT NULL THEN 1 ELSE 0 END) AS progress_reported,
+                        SUM(CASE WHEN EXISTS (SELECT 1 FROM scorm_interactions i2 WHERE i2.attempt_id = sa.id) THEN 1 ELSE 0 END) AS interactions_reported,
+                        SUM(CASE WHEN EXISTS (SELECT 1 FROM scorm_objectives o2 WHERE o2.attempt_id = sa.id) THEN 1 ELSE 0 END) AS objectives_reported,
+                        SUM(CASE WHEN COALESCE(sa.suspend_data,'') <> '' THEN 1 ELSE 0 END) AS suspend_reported,
+                        SUM(CASE WHEN EXISTS (SELECT 1 FROM scorm_comments_from_learner c2 WHERE c2.attempt_id = sa.id) THEN 1 ELSE 0 END) AS comments_reported
+                    FROM scorm_attempts sa
+                    JOIN scorm_packages sp ON sp.id = sa.package_id
+                    WHERE sp.status = 'active'" . $scope['sql'] . "
+                    GROUP BY sp.id, sp.title, sp.scorm_version, sp.scorm_edition
+                    ORDER BY attempts DESC
+                    LIMIT " . (int)$limit;
+            $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                $total = max(1, (int)$r['attempts']);
+                foreach (['status_reported','score_reported','time_reported','progress_reported','interactions_reported','objectives_reported','suspend_reported','comments_reported'] as $k) {
+                    $r[$k . '_pct'] = round(((int)$r[$k] / $total) * 100, 1);
+                }
+            }
+            unset($r);
+        } catch (PDOException $e) {
+            error_log('[ANALYTICS] telemetry: ' . $e->getMessage());
+        }
+        return $rows;
+    }
+}
+
+if (!function_exists('getPersistenceMonitoring')) {
+    /**
+     * Rejected-payload, duplicate-request, and failed-persistence monitoring
+     * from the scorm_monitor + idempotency tables (rolling window).
+     */
+    function getPersistenceMonitoring(int $hours = 24): array
+    {
+        $pdo = getDbConnection();
+        $out = ['rejected' => 0, 'failed' => 0, 'duplicate' => 0, 'duplicate_requests' => 0, 'commits' => 0, 'terminates' => 0];
+        try {
+            $sql = "SELECT monitor_type, COUNT(*) AS n
+                    FROM scorm_monitor
+                    WHERE created_at >= (NOW() - INTERVAL ? HOUR)
+                    GROUP BY monitor_type";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([(int)$hours]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $out[$r['monitor_type']] = (int)$r['n'];
+            }
+            $h = (int)$hours;
+            $dup = $pdo->query("SELECT COUNT(*) FROM scorm_request_idempotency WHERE response IS NOT NULL AND created_at >= (NOW() - INTERVAL $h HOUR)");
+            $out['duplicate_requests'] = (int)$dup->fetchColumn();
+            $ev = $pdo->query("SELECT event_type, COUNT(*) AS n FROM scorm_events WHERE created_at >= (NOW() - INTERVAL $h HOUR) GROUP BY event_type");
+            foreach ($ev->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if ($r['event_type'] === 'terminate') {
+                    $out['terminates'] = (int)$r['n'];
+                } else {
+                    $out['commits'] += (int)$r['n'];
+                }
+            }
+        } catch (PDOException $e) {
+            error_log('[ANALYTICS] persistenceMonitoring: ' . $e->getMessage());
+        }
+        return $out;
     }
 }

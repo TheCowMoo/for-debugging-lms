@@ -34,6 +34,14 @@ $funnel = getCompletionFunnel();
 $questionHeatmap = getQuestionPerformanceHeatmap(20);
 $slideBreakdown = getSlideTimeBreakdown(50);
 
+// Cross-version analytics (section 7) — behind the ANALYTICS_V2 feature flag.
+$v2 = analyticsV2Enabled();
+$v2CompletionPass = $v2 ? getCompletionPassRates(60) : [];
+$v2InteractionAccuracy = $v2 ? getInteractionAccuracy(null, 40) : [];
+$v2ScoreDist = $v2 ? getScoreDistribution(null) : [];
+$v2Telemetry = $v2 ? getTelemetryCompleteness(40) : [];
+$v2Monitoring = $v2 ? getPersistenceMonitoring(24) : [];
+
 // Department drill-down
 $deptRates = [];
 $deptGaps = [];
@@ -134,6 +142,10 @@ $formatter = function(int $seconds): string {
                 <div class="kpi-card"><div class="kpi-label">Learners</div><div class="kpi-value"><?php echo (int)$overview['total_learners']; ?></div></div>
                 <div class="kpi-card"><div class="kpi-label">Enrollments</div><div class="kpi-value"><?php echo (int)$overview['active_enrollments']; ?></div></div>
                 <div class="kpi-card"><div class="kpi-label">Completion Rate</div><div class="kpi-value"><?php echo $overview['completion_rate']; ?>%</div></div>
+                <?php if ($v2): ?>
+                <div class="kpi-card"><div class="kpi-label">Pass Rate</div><div class="kpi-value"><?php echo $overview['pass_rate']; ?>%</div></div>
+                <div class="kpi-card"><div class="kpi-label">Not Reported</div><div class="kpi-value"><?php echo (int)$overview['not_reported']; ?></div></div>
+                <?php endif; ?>
                 <div class="kpi-card"><div class="kpi-label">Avg Score</div><div class="kpi-value"><?php echo $overview['avg_score'] !== null ? $overview['avg_score'] : '—'; ?></div></div>
                 <div class="kpi-card"><div class="kpi-label">Total Time</div><div class="kpi-value"><?php echo $overview['total_hours']; ?>h</div></div>
                 <div class="kpi-card"><div class="kpi-label">Courses</div><div class="kpi-value"><?php echo (int)$overview['course_count']; ?></div></div>
@@ -383,6 +395,123 @@ $formatter = function(int $seconds): string {
                     <?php endif; ?>
                 </div>
             </div>
+        <?php if ($v2): ?>
+        <!-- ── Cross-version analytics (section 7) ── -->
+        <div class="card">
+            <div class="card-header"><h2>Completion vs Pass Rate (latest attempt per learner/SCO)</h2><span class="small muted">Completion and pass reported separately</span></div>
+            <div class="card-body" style="padding:0;">
+                <?php if (empty($v2CompletionPass)): ?>
+                    <div class="empty">No attempts yet.</div>
+                <?php else: ?>
+                    <table>
+                        <thead><tr><th>Package</th><th>Standard / Edition</th><th>Attempts</th><th>Learners</th><th>Completed</th><th>Completion %</th><th>Passed</th><th>Pass %</th><th>Not Reported</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($v2CompletionPass as $r): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($r['title']); ?></td>
+                                <td class="small muted"><?php echo htmlspecialchars($r['scorm_version'] . ' / ' . ($r['scorm_edition'] ?: '—')); ?></td>
+                                <td><?php echo (int)$r['attempts']; ?></td>
+                                <td><?php echo (int)$r['learners']; ?></td>
+                                <td><?php echo (int)$r['completed']; ?></td>
+                                <td><?php echo $r['completed_pct']; ?>%</td>
+                                <td><?php echo (int)$r['passed']; ?></td>
+                                <td><?php echo $r['passed_pct']; ?>%</td>
+                                <td class="small muted"><?php echo (int)$r['no_signal']; ?> (<?php echo $r['no_signal_pct']; ?>%)</td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><h2>Interaction Accuracy &amp; Latency</h2><span class="small muted">Per question id</span></div>
+            <div class="card-body" style="padding:0;">
+                <?php if (empty($v2InteractionAccuracy)): ?>
+                    <div class="empty">No interaction data reported yet.</div>
+                <?php else: ?>
+                    <table>
+                        <thead><tr><th>Interaction</th><th>Type</th><th>Attempts</th><th>Correct</th><th>Accuracy %</th><th>Avg Latency</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($v2InteractionAccuracy as $r): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($r['interaction_id']); ?></td>
+                                <td class="small muted"><?php echo htmlspecialchars($r['interaction_type'] ?: '—'); ?></td>
+                                <td><?php echo (int)$r['attempts']; ?></td>
+                                <td><?php echo (int)$r['correct']; ?></td>
+                                <td><?php echo $r['accuracy_pct']; ?>%</td>
+                                <td><?php echo $r['avg_latency_s'] !== null ? $r['avg_latency_s'] . 's' : '—'; ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><h2>Score Distribution (latest attempts)</h2><span class="small muted">'Not reported' is distinct from a zero score</span></div>
+            <div class="card-body">
+                <?php if (empty($v2ScoreDist)): ?>
+                    <div class="empty">No score data yet.</div>
+                <?php else: ?>
+                    <table>
+                        <thead><tr><th>Bucket</th><th>Attempts</th><th>Share</th></tr></thead>
+                        <tbody>
+                        <?php $scoreTotal = array_sum(array_map('intval', array_column($v2ScoreDist, 'n'))); ?>
+                        <?php foreach ($v2ScoreDist as $r): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($r['bucket']); ?></td>
+                                <td><?php echo (int)$r['n']; ?></td>
+                                <td><?php echo $scoreTotal > 0 ? round(((int)$r['n'] / $scoreTotal) * 100, 1) : 0; ?>%</td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><h2>Package Telemetry Completeness</h2><span class="small muted">% of attempts with each signal</span></div>
+            <div class="card-body" style="padding:0;">
+                <?php if (empty($v2Telemetry)): ?>
+                    <div class="empty">No attempts yet.</div>
+                <?php else: ?>
+                    <table>
+                        <thead><tr><th>Package</th><th>Edition</th><th>Attempts</th><th>Status</th><th>Score</th><th>Time</th><th>Progress</th><th>Interactions</th><th>Objectives</th><th>Suspend</th><th>Comments</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($v2Telemetry as $r): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($r['title']); ?></td>
+                                <td class="small muted"><?php echo htmlspecialchars($r['scorm_edition'] ?: $r['scorm_version']); ?></td>
+                                <td><?php echo (int)$r['attempts']; ?></td>
+                                <?php foreach (['status_reported_pct','score_reported_pct','time_reported_pct','progress_reported_pct','interactions_reported_pct','objectives_reported_pct','suspend_reported_pct','comments_reported_pct'] as $k): ?>
+                                    <td><?php echo $r[$k]; ?>%</td>
+                                <?php endforeach; ?>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><h2>Persistence Monitoring (last 24h)</h2><span class="small muted">Rejected / duplicate / failed requests</span></div>
+            <div class="card-body">
+                <div class="kpi-row">
+                    <div class="kpi-card"><div class="kpi-label">Commits</div><div class="kpi-value"><?php echo (int)($v2Monitoring['commits'] ?? 0); ?></div></div>
+                    <div class="kpi-card"><div class="kpi-label">Terminates</div><div class="kpi-value"><?php echo (int)($v2Monitoring['terminates'] ?? 0); ?></div></div>
+                    <div class="kpi-card"><div class="kpi-label">Rejected</div><div class="kpi-value"><?php echo (int)($v2Monitoring['rejected'] ?? 0); ?></div></div>
+                    <div class="kpi-card"><div class="kpi-label">Duplicates</div><div class="kpi-value"><?php echo (int)($v2Monitoring['duplicate'] ?? 0) + (int)($v2Monitoring['duplicate_requests'] ?? 0); ?></div></div>
+                    <div class="kpi-card"><div class="kpi-label">Failed Persistence</div><div class="kpi-value"><?php echo (int)($v2Monitoring['failed'] ?? 0); ?></div></div>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+
         </div>
     </main>
 

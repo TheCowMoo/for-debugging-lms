@@ -596,6 +596,23 @@ function ensureUserColumns(): void
         error_log('[DB] ensureUserColumns failed: ' . $e->getMessage());
     }
 }
+/**
+ * Ensure the users.preferences column exists (safe ALTER, no-op if present).
+ * Stores per-user appearance settings as JSON (theme, font scale).
+ */
+function ensureUserPreferencesColumn(): void
+{
+    $pdo = getDbConnection();
+    try {
+        $columns = $pdo->query("SHOW COLUMNS FROM users")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('preferences', $columns, true)) {
+            $pdo->exec("ALTER TABLE users ADD COLUMN preferences TEXT NULL AFTER is_team_lead");
+        }
+    } catch (PDOException $e) {
+        error_log('[DB] ensureUserPreferencesColumn failed: ' . $e->getMessage());
+    }
+}
+
 
 // —— Shared functions (used by both the moodle bridge and standard UI) ——
 
@@ -620,6 +637,86 @@ function requireLogin(): void
         redirectTo('login/');
     }
 }
+function getUserPreferences(): array
+{
+    $defaults = ['theme' => 'light', 'font_scale' => 'normal'];
+
+    // Local test user has no database row - keep preferences in the session only.
+    if (isTestUser()) {
+        $sessionPrefs = $_SESSION['preferences'] ?? [];
+        return array_merge($defaults, array_intersect_key($sessionPrefs, $defaults));
+    }
+
+    $userId = $_SESSION['user_id'] ?? null;
+    if (!$userId) {
+        return $defaults;
+    }
+
+    $readPrefs = function () use ($userId): ?array {
+        $pdo = getDbConnection();
+        $stmt = $pdo->prepare("SELECT preferences FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return ($row && !empty($row['preferences'])) ? json_decode($row['preferences'], true) : [];
+    };
+
+    try {
+        $prefs = $readPrefs();
+    } catch (PDOException $e) {
+        try {
+            ensureUserPreferencesColumn();
+            $prefs = $readPrefs();
+        } catch (PDOException $e2) {
+            error_log('[DB] getUserPreferences failed: ' . $e2->getMessage());
+            $prefs = [];
+        }
+    }
+
+    if (!is_array($prefs)) {
+        $prefs = [];
+    }
+    return array_merge($defaults, array_intersect_key($prefs, $defaults));
+}
+
+function saveUserPreferences(array $prefs): bool
+{
+    $allowed = [
+        'theme'      => ['light', 'dark'],
+        'font_scale' => ['small', 'normal', 'large'],
+    ];
+
+    $clean = [];
+    foreach ($allowed as $key => $values) {
+        if (isset($prefs[$key]) && in_array($prefs[$key], $values, true)) {
+            $clean[$key] = $prefs[$key];
+        }
+    }
+    if (empty($clean)) {
+        return false;
+    }
+
+    if (isTestUser()) {
+        $_SESSION['preferences'] = array_merge(getUserPreferences(), $clean);
+        return true;
+    }
+
+    $userId = $_SESSION['user_id'] ?? null;
+    if (!$userId) {
+        return false;
+    }
+
+    try {
+        ensureUserPreferencesColumn();
+        $merged = array_merge(getUserPreferences(), $clean);
+        $pdo = getDbConnection();
+        $stmt = $pdo->prepare("UPDATE users SET preferences = ? WHERE id = ?");
+        return $stmt->execute([json_encode($merged), $userId]);
+    } catch (PDOException $e) {
+        error_log('[DB] saveUserPreferences failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
 
 // —— Stateless SCORM Serve Token ——
 // A short-lived HMAC token that authorises serve.php asset requests from
@@ -873,6 +970,14 @@ function ensureScormTables(): void
         description TEXT,
         version VARCHAR(50) DEFAULT '1.0',
         scorm_version ENUM('1.2', '2004') NOT NULL DEFAULT '1.2',
+        scorm_edition VARCHAR(20) NOT NULL DEFAULT '',
+        manifest_id VARCHAR(255) NOT NULL DEFAULT '',
+        package_version VARCHAR(100) NOT NULL DEFAULT '',
+        sco_count INT NOT NULL DEFAULT 0,
+        activity_tree JSON NULL,
+        resource_metadata JSON NULL,
+        content_hash VARCHAR(64) NOT NULL DEFAULT '',
+        fingerprint JSON NULL,
         manifest_xml LONGTEXT NOT NULL,
         launch_sco_id INT NULL,
         upload_path VARCHAR(500) NOT NULL,
@@ -881,6 +986,7 @@ function ensureScormTables(): void
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_org (organization_id),
         INDEX idx_status (status),
+        INDEX idx_scorm_version (scorm_version, scorm_edition),
         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
@@ -926,6 +1032,7 @@ function ensureScormTables(): void
         department VARCHAR(255) NULL COMMENT 'Snapshot of user dept at time of attempt',
         sco_item_id INT NULL,
         package_id INT NOT NULL,
+        scorm_edition VARCHAR(20) NOT NULL DEFAULT '',
         attempt_number INT DEFAULT 1,
         registration_id VARCHAR(255) DEFAULT '',
         lesson_status VARCHAR(50) DEFAULT 'not attempted',
@@ -942,7 +1049,16 @@ function ensureScormTables(): void
         lesson_location VARCHAR(500) DEFAULT '',
         suspend_data LONGTEXT,
         progress_measure DECIMAL(5,4) NULL,
+        completion_threshold DECIMAL(5,4) NULL,
+        scaled_passing_score DECIMAL(5,4) NULL,
+        normalized_completion VARCHAR(20) NOT NULL DEFAULT '',
+        normalized_success VARCHAR(20) NOT NULL DEFAULT '',
+        status_source VARCHAR(20) NOT NULL DEFAULT '',
+        attempt_state VARCHAR(30) NOT NULL DEFAULT '',
+        last_request_id VARCHAR(64) NOT NULL DEFAULT '',
         entry VARCHAR(50) DEFAULT 'ab-initio',
+        mode VARCHAR(20) NOT NULL DEFAULT '',
+        credit VARCHAR(20) NOT NULL DEFAULT '',
         `exit` VARCHAR(50) DEFAULT '',
         launch_sco_id INT NULL,
         browser_info JSON NULL,
@@ -955,10 +1071,17 @@ function ensureScormTables(): void
         FOREIGN KEY (sco_item_id) REFERENCES sco_items(id) ON DELETE CASCADE,
         FOREIGN KEY (package_id) REFERENCES scorm_packages(id) ON DELETE CASCADE,
         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE SET NULL,
+        UNIQUE KEY uq_attempt (user_id, package_id, sco_item_id, attempt_number),
         INDEX idx_user_sco (user_id, sco_item_id),
+        INDEX idx_user_pkg_sco (user_id, package_id, sco_item_id),
         INDEX idx_org_dept (organization_id, department),
         INDEX idx_package (package_id),
         INDEX idx_status (lesson_status),
+        INDEX idx_completion_status (completion_status),
+        INDEX idx_success_status (success_status),
+        INDEX idx_attempt_state (attempt_state),
+        INDEX idx_started_at (started_at),
+        INDEX idx_last_accessed (last_accessed_at),
         INDEX idx_completion (is_complete, completed_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
@@ -972,6 +1095,7 @@ function ensureScormTables(): void
         interaction_type VARCHAR(50) DEFAULT '',
         learner_response TEXT,
         correct_responses JSON NULL,
+        correct_response_ids JSON NULL,
         result VARCHAR(50) DEFAULT '',
         weighting DECIMAL(10,4) NULL,
         latency_seconds DECIMAL(10,2) NULL,
@@ -979,8 +1103,10 @@ function ensureScormTables(): void
         timestamp TIMESTAMP NULL,
         FOREIGN KEY (attempt_id) REFERENCES scorm_attempts(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE KEY uq_interaction (attempt_id, interaction_index),
         INDEX idx_attempt (attempt_id),
-        INDEX idx_user_interaction (user_id, interaction_id)
+        INDEX idx_user_interaction (user_id, interaction_id),
+        INDEX idx_interaction_id (interaction_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
     // scorm_objectives: one row per cmi.objectives.n
@@ -1000,7 +1126,9 @@ function ensureScormTables(): void
         description TEXT,
         FOREIGN KEY (attempt_id) REFERENCES scorm_attempts(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        INDEX idx_attempt (attempt_id)
+        UNIQUE KEY uq_objective (attempt_id, objective_index),
+        INDEX idx_attempt (attempt_id),
+        INDEX idx_objective_id (objective_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
     // scorm_events: fine-grained audit log of every LMSCommit()
@@ -1013,15 +1141,241 @@ function ensureScormTables(): void
         old_value TEXT,
         new_value TEXT,
         slide_id VARCHAR(255) DEFAULT '',
+        request_id VARCHAR(64) NOT NULL DEFAULT '',
+        changed_fields JSON NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (attempt_id) REFERENCES scorm_attempts(id) ON DELETE CASCADE,
         INDEX idx_attempt_time (attempt_id, created_at),
+        INDEX idx_user (user_id),
+        INDEX idx_request_id (request_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // scorm_interaction_objectives: cmi.interactions.n.objectives.m.id links
+    $pdo->exec("CREATE TABLE IF NOT EXISTS scorm_interaction_objectives (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        attempt_id INT NOT NULL,
+        interaction_index INT NOT NULL,
+        objective_index INT NOT NULL,
+        objective_id VARCHAR(255) NOT NULL DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_link (attempt_id, interaction_index, objective_index),
+        FOREIGN KEY (attempt_id) REFERENCES scorm_attempts(id) ON DELETE CASCADE,
+        INDEX idx_attempt (attempt_id),
+        INDEX idx_objective_id (objective_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // scorm_comments_from_learner: SCORM 2004 cmi.comments_from_learner.n.*
+    $pdo->exec("CREATE TABLE IF NOT EXISTS scorm_comments_from_learner (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        attempt_id INT NOT NULL,
+        user_id INT NOT NULL,
+        comment_index INT NOT NULL,
+        comment_text TEXT,
+        location VARCHAR(500) NOT NULL DEFAULT '',
+        timestamp TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_comment (attempt_id, comment_index),
+        FOREIGN KEY (attempt_id) REFERENCES scorm_attempts(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        INDEX idx_attempt (attempt_id),
         INDEX idx_user (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // scorm_request_idempotency: browser commit/beacon request dedupe
+    $pdo->exec("CREATE TABLE IF NOT EXISTS scorm_request_idempotency (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        request_id VARCHAR(64) NOT NULL,
+        user_id INT NOT NULL,
+        attempt_id INT NULL,
+        response JSON NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_request_id (request_id),
+        INDEX idx_attempt (attempt_id),
+        INDEX idx_user (user_id),
+        INDEX idx_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // scorm_monitor: rejected-payload / duplicate-request / failed-persistence log
+    $pdo->exec("CREATE TABLE IF NOT EXISTS scorm_monitor (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        monitor_type VARCHAR(30) NOT NULL,
+        reason VARCHAR(255) NOT NULL DEFAULT '',
+        request_id VARCHAR(64) NOT NULL DEFAULT '',
+        user_id INT NULL,
+        package_id INT NULL,
+        http_status INT NOT NULL DEFAULT 0,
+        detail JSON NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_type_created (monitor_type, created_at),
+        INDEX idx_request (request_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     } catch (PDOException $e) {
         // Log the failure but don't crash the page — individual tables may
         // already exist, and some MySQL versions have quirks with JSON/FK.
         error_log('[SCORM] ensureScormTables error: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Apply pending versioned SCORM schema migrations.
+ *
+ * The versioned migrations in /migrations are the canonical place for schema
+ * evolution (see migrations/README.md). This helper is the automatic entry
+ * point used by scorm-api/store.php and the admin upload handlers. It is a
+ * no-op (one indexed SELECT) once everything is applied, and a MySQL advisory
+ * lock serialises concurrent requests so a migration never runs twice.
+ */
+function ensureScormMigrations(): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+    try {
+        $pdo = getDbConnection();
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version VARCHAR(100) NOT NULL PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                result VARCHAR(20) DEFAULT 'applied'
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+
+        $dir = __DIR__ . '/migrations';
+        $files = glob($dir . '/[0-9]*_*.php');
+        if (!$files) {
+            $checked = true;
+            return;
+        }
+        sort($files, SORT_STRING);
+
+        // Fast path: every discovered migration is already recorded.
+        $applied = [];
+        foreach ($pdo->query('SELECT version FROM schema_migrations') as $row) {
+            $applied[$row['version']] = true;
+        }
+        $pending = [];
+        foreach ($files as $file) {
+            $version = basename($file, '.php');
+            if (!isset($applied[$version])) {
+                $pending[] = $file;
+            }
+        }
+        if (!$pending) {
+            $checked = true;
+            return;
+        }
+
+        $lockOk = (bool)$pdo->query("SELECT GET_LOCK('pp_scorm_migrations', 5)")->fetchColumn();
+        if (!$lockOk) {
+            error_log('[SCORM] ensureScormMigrations: lock busy, skipping this request.');
+            return;
+        }
+        try {
+            foreach ($pending as $file) {
+                $version = basename($file, '.php');
+                $stmt = $pdo->prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = ?');
+                $stmt->execute([$version]);
+                if ((int)$stmt->fetchColumn() > 0) {
+                    continue;
+                }
+                $up = require $file;
+                if (is_callable($up)) {
+                    $up($pdo);
+                }
+                $ins = $pdo->prepare("INSERT INTO schema_migrations (version) VALUES (?)");
+                $ins->execute([$version]);
+                error_log('[SCORM] ensureScormMigrations applied ' . $version);
+            }
+        } finally {
+            $pdo->query("SELECT RELEASE_LOCK('pp_scorm_migrations')");
+        }
+        $checked = true;
+    } catch (Throwable $e) {
+        // Never let migration machinery break a page request; log for admins.
+        error_log('[SCORM] ensureScormMigrations error: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Ensure the security-hardening tables + user lockout columns exist.
+ *
+ * Auth hardening (migrations/0002_security_hardening.php) uses:
+ *   security_events  — audit log (logins, admin actions, MFA, lockouts)
+ *   auth_attempts    — per-account + per-IP login attempt tracker
+ *   mfa_challenges   — email MFA 6-digit challenges
+ *   users            — failed_login_count / failed_login_started_at / locked_until
+ *
+ * Called by login, MFA, password, and admin-action pages. Idempotent; safe to
+ * run on every request.
+ */
+function ensureSecurityTables(): void
+{
+    $pdo = getDbConnection();
+    try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS security_events (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                event_type VARCHAR(60) NOT NULL,
+                severity VARCHAR(20) NOT NULL DEFAULT 'info',
+                actor_user_id INT NULL,
+                actor_email VARCHAR(255) NOT NULL DEFAULT '',
+                actor_ip VARCHAR(45) NOT NULL DEFAULT '',
+                target_user_id INT NULL,
+                target_email VARCHAR(255) NOT NULL DEFAULT '',
+                detail JSON NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_type_created (event_type, created_at),
+                INDEX idx_severity (severity),
+                INDEX idx_actor (actor_user_id),
+                INDEX idx_actor_ip (actor_ip),
+                INDEX idx_target (target_user_id),
+                INDEX idx_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS auth_attempts (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL DEFAULT '',
+                user_id INT NULL,
+                ip_hash CHAR(32) NOT NULL DEFAULT '',
+                attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                success TINYINT(1) NOT NULL DEFAULT 0,
+                user_agent VARCHAR(255) NOT NULL DEFAULT '',
+                lockout_triggered TINYINT(1) NOT NULL DEFAULT 0,
+                INDEX idx_user_time (user_id, attempted_at),
+                INDEX idx_email_time (email, attempted_at),
+                INDEX idx_ip_time (ip_hash, attempted_at),
+                INDEX idx_success (success)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS mfa_challenges (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                code_hash VARCHAR(255) NOT NULL,
+                expires_at DATETIME NOT NULL,
+                attempts INT NOT NULL DEFAULT 0,
+                consumed_at DATETIME NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_user_created (user_id, created_at),
+                INDEX idx_expires (expires_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+
+        // Per-account lockout state on users (guarded ALTERs).
+        $columns = $pdo->query("SHOW COLUMNS FROM users")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('failed_login_count', $columns, true)) {
+            $pdo->exec("ALTER TABLE users ADD COLUMN failed_login_count INT NOT NULL DEFAULT 0 AFTER is_verified");
+        }
+        if (!in_array('failed_login_started_at', $columns, true)) {
+            $pdo->exec("ALTER TABLE users ADD COLUMN failed_login_started_at DATETIME NULL AFTER failed_login_count");
+        }
+        if (!in_array('locked_until', $columns, true)) {
+            $pdo->exec("ALTER TABLE users ADD COLUMN locked_until DATETIME NULL AFTER failed_login_started_at");
+        }
+    } catch (PDOException $e) {
+        error_log('[SECURITY] ensureSecurityTables error: ' . $e->getMessage());
     }
 }
 

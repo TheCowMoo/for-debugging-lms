@@ -24,6 +24,7 @@
  */
 
 require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../scorm-api/scorm-normalize.php';
 
 requireLogin();
 requireAdmin();
@@ -180,6 +181,9 @@ try {
     if (strpos($rootEl->getAttribute('xmlns'), 'adlcp_v1p3') !== false || strpos($manifestXml, 'adlcp_v1p3') !== false) {
         $schemaVersion = '2004';
     }
+    // Edition detection ('1.2', '2004 2nd/3rd/4th Edition') — stored on the
+    // package row and used for suspend-data limits and field semantics.
+    $scormEdition = scormDetectEdition($manifestXml);
 
     // Extract title
     $title = trim($_POST['package_title'] ?? '') ?: '';
@@ -237,17 +241,18 @@ try {
     $pdo = getDbConnection();
     if ($replacePkgId > 0) {
         // Replace keeps the same package id so assignments, links and history survive.
-        $pdo->prepare("UPDATE scorm_packages SET title = ?, description = ?, scorm_version = ?, manifest_xml = ?, status = 'draft' WHERE id = ?")
-            ->execute([$title, $description, $schemaVersion, $manifestXml, $replacePkgId]);
+        $pdo->prepare("UPDATE scorm_packages SET title = ?, description = ?, scorm_version = ?, scorm_edition = ?, manifest_xml = ?, status = 'draft' WHERE id = ?")
+            ->execute([$title, $description, $schemaVersion, $scormEdition, $manifestXml, $replacePkgId]);
         $packageId = $replacePkgId;
     } else {
-        $insert = $pdo->prepare("INSERT INTO scorm_packages (organization_id, title, description, scorm_version, manifest_xml, upload_path, status)
-                                 VALUES (?, ?, ?, ?, ?, '', 'draft')");
+        $insert = $pdo->prepare("INSERT INTO scorm_packages (organization_id, title, description, scorm_version, scorm_edition, manifest_xml, upload_path, status)
+                                 VALUES (?, ?, ?, ?, ?, ?, '', 'draft')");
         $insert->execute([
             $orgId !== 0 ? $orgId : null,
             $title,
             $description,
             $schemaVersion,
+            $scormEdition,
             $manifestXml,
         ]);
         $packageId = (int)$pdo->lastInsertId();

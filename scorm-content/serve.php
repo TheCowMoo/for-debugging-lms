@@ -26,6 +26,7 @@
  *   so cached entries never need invalidation. Use ?nocache=1 to bypass.
  */
 require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../scorm-api/scorm-normalize.php';
 
 // ── Authentication ──
 // SCORM asset requests (JS, CSS, sub-HTML) originate from inside an iframe.
@@ -701,6 +702,12 @@ $inject = "<script>window.SCORM_PACKAGE_CONFIG = " . json_encode([
     'pkg' => $packageId,
     'sco' => (int)($_GET['sco'] ?? 0),
     'version' => $pkg['scorm_version'] ?? '1.2',
+    // scorm_edition ('1.2', '2004 2nd Edition', ...) — drives suspend-data
+    // limits and edition-specific field behaviour in scorm-rte.js.
+    'edition' => $pkg['scorm_edition'] ?? '',
+    // Edition-aware suspend_data character limit, computed server-side so the
+    // RTE never needs to re-derive it (see scorm-normalize.php).
+    'suspendLimit' => scormSuspendDataLimit($pkg['scorm_edition'] ?? ($pkg['scorm_version'] ?? '1.2')),
     'apiEndpoint' => rtrim(buildUrl('scorm-api/store.php'), '/'),
     // Serve token — lets scorm-rte.js authenticate its store.php tracking POST
     // without the session cookie (SameSite=Lax isn't sent from inside the iframe).

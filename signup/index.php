@@ -5,6 +5,7 @@
  * is done separately via user-management admin panel.
  */
 require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../includes/security.php';
 require_once __DIR__ . '/ghl_helper.php';
 
 $error = '';
@@ -59,6 +60,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $firstName = trim($_POST['first_name']);
         $lastName  = trim($_POST['last_name']);
         $v_token   = bin2hex(random_bytes(32));
+
+        // Enforce the standard (non-admin) password policy at signup.
+        $signupPolicy = validatePasswordPolicy($password, 'student');
+        if (!$signupPolicy['ok']) {
+            $error = $signupPolicy['error'];
+        } else {
 
         $prefill_department = trim($_POST['department'] ?? $prefill_department);
         $prefill_is_lead = (isset($_POST['is_team_lead']) && $_POST['is_team_lead'] === '1') ? 1 : $prefill_is_lead;
@@ -176,6 +183,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         } catch (Exception $e) {
             $error = $e->getMessage();
+        }
         }
     }
 }

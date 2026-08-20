@@ -125,6 +125,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->prepare("DELETE FROM course_assignments WHERE package_id = ? AND organization_id = ?")
             ->execute([$packageId, $targetOrgId]);
         $success_msg = 'Assignment removed.';
+    } elseif (isset($_POST['action_edit_package'])) {
+        $packageId = (int)$_POST['action_edit_package'];
+        $editTitle = trim($_POST['edit_title'] ?? '');
+        $editDescription = trim($_POST['edit_description'] ?? '');
+        $editVersion = trim($_POST['edit_version'] ?? '') ?: '1.0';
+        $editStatus = in_array($_POST['edit_status'] ?? '', ['active', 'archived', 'draft'], true) ? $_POST['edit_status'] : 'active';
+
+        if ($editTitle === '') {
+            $error_msg = 'Title is required.';
+        } else {
+            $permOk = true;
+            if (!$isSuper) {
+                $check = $pdo->prepare("SELECT id FROM scorm_packages WHERE id = ? AND organization_id = ?");
+                $check->execute([$packageId, $currentOrgId]);
+                if (!$check->fetch()) {
+                    $permOk = false;
+                    $error_msg = 'You do not have permission to edit this package.';
+                }
+            }
+            if ($permOk) {
+                try {
+                    $pdo->prepare("UPDATE scorm_packages SET title = ?, description = ?, version = ?, status = ? WHERE id = ?")
+                        ->execute([$editTitle, $editDescription !== '' ? $editDescription : null, $editVersion, $editStatus, $packageId]);
+                    $success_msg = 'Package updated.';
+                } catch (PDOException $e) {
+                    error_log('[SCORM] Edit failed: ' . $e->getMessage());
+                    $error_msg = 'Failed to update package.';
+                }
+            }
+        }
     }
 }
 
@@ -409,6 +439,14 @@ $servePreviewUrl = function (int $pkgId): string {
                                             <a href="<?php echo $servePreviewUrl((int)$pkg['id']); ?>" target="_blank" rel="noopener" class="btn-secondary" style="text-decoration:none; display:inline-block;">Preview</a>
 
                                             <?php if ($isSuper || (int)$pkg['organization_id'] === (int)$currentOrgId): ?>
+                                                <button type="button" class="btn-secondary"
+                                                    onclick="showEditPkg(this)"
+                                                    data-id="<?php echo (int)$pkg['id']; ?>"
+                                                    data-title="<?php echo htmlspecialchars($pkg['title'], ENT_QUOTES); ?>"
+                                                    data-desc="<?php echo htmlspecialchars($pkg['description'] ?? '', ENT_QUOTES); ?>"
+                                                    data-version="<?php echo htmlspecialchars($pkg['version'] ?? '1.0', ENT_QUOTES); ?>"
+                                                    data-status="<?php echo htmlspecialchars($pkg['status'] ?? 'active', ENT_QUOTES); ?>">Edit</button>
+
                                                 <!-- Assign to org (super admin) -->
                                                 <?php if ($isSuper): ?>
                                                     <button type="button" class="btn-secondary" onclick="showAssign(<?php echo (int)$pkg['id']; ?>, '<?php echo addslashes($pkg['title']); ?>')">Assign</button>
@@ -456,6 +494,41 @@ $servePreviewUrl = function (int $pkgId): string {
                 <div style="display:flex; gap:8px; justify-content:flex-end;">
                     <button type="button" class="btn-secondary" onclick="closeAssign()">Cancel</button>
                     <button type="submit" class="btn-primary">Assign</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Package Modal -->
+    <div id="editModal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.5); z-index:1001; align-items:center; justify-content:center;">
+        <div style="background:#fff; border-radius:16px; padding:28px; max-width:520px; width:90%; max-height:90vh; overflow:auto;">
+            <h3 style="margin-top:0;" id="editModalTitle">Edit Package</h3>
+            <form method="POST">
+                <?php echo csrfHiddenField(); ?>
+                <input type="hidden" name="action_edit_package" value="0" id="editPkgId">
+                <div class="field">
+                    <label>Title</label>
+                    <input type="text" name="edit_title" id="editPkgTitle" required>
+                </div>
+                <div class="field">
+                    <label>Description</label>
+                    <textarea name="edit_description" id="editPkgDesc" rows="3" placeholder="Short description shown to admins"></textarea>
+                </div>
+                <div class="field">
+                    <label>Version</label>
+                    <input type="text" name="edit_version" id="editPkgVersion" placeholder="e.g. 1.0">
+                </div>
+                <div class="field">
+                    <label>Status</label>
+                    <select name="edit_status" id="editPkgStatus">
+                        <option value="active">Active</option>
+                        <option value="archived">Archived</option>
+                        <option value="draft">Draft</option>
+                    </select>
+                </div>
+                <div style="display:flex; gap:8px; justify-content:flex-end;">
+                    <button type="button" class="btn-secondary" onclick="closeEditPkg()">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Changes</button>
                 </div>
             </form>
         </div>
@@ -617,6 +690,22 @@ $servePreviewUrl = function (int $pkgId): string {
         }
         document.getElementById('assignModal').addEventListener('click', function(e) {
             if (e.target === this) closeAssign();
+        });
+
+        // Edit Package modal
+        function showEditPkg(btn) {
+            document.getElementById('editPkgId').value = btn.dataset.id;
+            document.getElementById('editPkgTitle').value = btn.dataset.title || '';
+            document.getElementById('editPkgDesc').value = btn.dataset.desc || '';
+            document.getElementById('editPkgVersion').value = btn.dataset.version || '';
+            document.getElementById('editPkgStatus').value = btn.dataset.status || 'active';
+            document.getElementById('editModal').style.display = 'flex';
+        }
+        function closeEditPkg() {
+            document.getElementById('editModal').style.display = 'none';
+        }
+        document.getElementById('editModal').addEventListener('click', function(e) {
+            if (e.target === this) closeEditPkg();
         });
 
         // —— S3 Repair ——
