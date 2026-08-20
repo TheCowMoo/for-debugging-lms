@@ -1,0 +1,15 @@
+# Environment configuration (contains secrets, NEVER commit)
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# ZIP archives (old builds)
+*.zip
+
+# IDE / editor files
+.idea/
+.vscode/
+*.swp
+*.swo

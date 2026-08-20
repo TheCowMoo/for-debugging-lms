@@ -1,0 +1,22 @@
+# SCORM Content Router
+# Rewrites /scorm-content/{packageId}/{path...} → serve.php?pkg={packageId}&path={path}
+# so relative asset URLs inside SCORM packages resolve correctly.
+#
+# Example:
+#   /scorm-content/5/story_content/story.js
+#     → /scorm-content/serve.php?pkg=5&path=story_content/story.js
+#   /scorm-content/5/
+#     → serve.php?pkg=5  (serves the launch SCO)
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Only rewrite if the file doesn't already exist on disk
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+
+    # /scorm-content/{pkg}/{path...} or /scorm-content/{pkg}
+    RewriteRule ^([0-9]+)(?:/(.*))?$ serve.php?pkg=$1&path=$2 [L,QSA,NC]
+</IfModule>

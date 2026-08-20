@@ -1,0 +1,37 @@
+# PURSUIT PATHWAYS LMS — Root .htaccess
+# ------------------------------------------------------------------
+# Minimal root .htaccess with source-code protection.
+#
+# NOTE: This site runs on nginx (HestiaCP), which does NOT process
+# .htaccess. These rules are defense-in-depth for Apache/LiteSpeed.
+# The authoritative protections live in:
+#   server-config/hestiacp-nginx-security.conf  (deploy to nginx)
+# ------------------------------------------------------------------
+
+Options -Indexes
+
+# ── Block ALL dot-files (.env, .gitignore, .editorconfig, etc.) ──
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# ── Block specific sensitive config files ──
+<FilesMatch "^(\.env|\.user\.ini|\.editorconfig|composer\.json|package\.json|package-lock\.json|\.htaccess|\.htpasswd)$">
+    Require all denied
+</FilesMatch>
+
+# ── Block log/backup/source-map files ──
+<FilesMatch "\.(log|lock|md|bak|swp|map)$">
+    Require all denied
+</FilesMatch>
+
+# ── Block direct access to backend bootstrap/include files ──
+<FilesMatch "^(bootstrap|s3-helpers|moodle-bridge|_diag)\.php$">
+    Require all denied
+</FilesMatch>
+
+# ── Block direct access to the includes/ directory ──
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^includes/ - [F,L]
+</IfModule>

@@ -1,0 +1,132 @@
+/* ==========================================================
+   PP LMS — Shared Main Stylesheet
+   Import this BEFORE page-specific styles
+   ========================================================== */
+
+:root {
+    --primary: #82ACD6;
+    --primary-hover: #00808E;
+    --accent: #00808E;
+    --danger: #E4E348;
+    --bg-body: #D3E2F3;
+    --bg-card: #FFFFFF;
+    --text-main: #232D63;
+    --text-muted: #232D63;
+    --border: #BBBDB7;
+    --radius: 12px;
+    --sidebar-width: 280px;
+    --admin-accent: #00808E;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background-color: var(--bg-body);
+    color: var(--text-main);
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    display: flex;
+    min-height: 100vh;
+}
+
+/* ---- MAIN CONTENT LAYOUT ---- */
+main {
+    margin-left: var(--sidebar-width);
+    flex: 1;
+    padding: 48px 64px;
+    width: 100%;
+    transition: 0.3s;
+}
+
+/* ---- TYPOGRAPHY ---- */
+h1, h2, h3, h4, h5, h6 { margin-top: 0; }
+
+/* ---- CARDS ---- */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+}
+
+/* ---- STATUS BADGES ---- */
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.status-success { background: #dbeafe; color: #1d4ed8; }
+.status-warning { background: #fef3c7; color: #92400e; }
+.status-danger  { background: #dcfce7; color: #166534; }
+
+/* ---- PROGRESS BARS ---- */
+.progress-bar-bg {
+    background: #e2e8f0;
+    border-radius: 999px;
+    height: 12px;
+    overflow: hidden;
+}
+.progress-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.4s ease;
+}
+.progress-bar-fill.primary { background: #82ACD6; }
+.progress-bar-fill.warning { background: #E4E348; }
+.progress-bar-fill.danger  { background: #00808E; }
+.progress-bar-fill.success { background: #82ACD6; }
+
+/* ---- BUTTONS ---- */
+.btn-primary {
+    width: 100%;
+    padding: 14px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 1rem;
+    margin-top: 10px;
+    transition: background 0.2s;
+}
+.btn-primary:hover { background: var(--primary-hover); }
+
+.btn-ghost {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.btn-ghost:hover { background: var(--bg-body); }
+
+/* ---- LINKS ---- */
+.link-primary {
+    color: var(--primary);
+    font-weight: 700;
+    text-decoration: none;
+}
+.link-primary:hover { text-decoration: underline; }
+
+/* ---- RESPONSIVE ---- */
+@media (max-width: 1024px) {
+    main {
+        margin-left: 0;
+        padding: 80px 20px 20px;
+    }
+}
+
+@media print {
+    nav, .mobile-bar, .btn-print, .overlay { display: none !important; }
+    main { margin-left: 0; padding: 0; }
+}
