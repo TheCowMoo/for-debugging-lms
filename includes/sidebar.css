@@ -58,8 +58,11 @@ nav#sidebar {
     display: flex;
     flex-direction: column;
     position: fixed;
+    top: 0;
+    bottom: 0;
     height: 100vh;
     height: 100dvh;
+    min-height: 0;
     overflow: hidden;
     z-index: 1000;
     transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -103,11 +106,13 @@ nav#sidebar {
 /* Nav links scroll when they exceed the available height (the fixed-height
    sidebar would otherwise clip links below the fold on short screens). */
 .nav-links-container {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: rgba(143, 168, 158, 0.45) transparent;
 }
@@ -134,5 +139,4 @@ nav#sidebar {
     }
     .overlay.active { display: block; }
     nav#sidebar .logo-area { margin-bottom: 20px; }
-    nav#sidebar .nav-links-container { overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
 }
