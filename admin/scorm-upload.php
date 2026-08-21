@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * NATIVE SCORM READER — SCORM Package Management (Phase 1)
  *
  * Admin page for uploading SCORM .zip packages, viewing the package
@@ -191,24 +191,11 @@ $servePreviewUrl = function (int $pkgId): string {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SCORM Packages | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <style>
-        :root {
-            --primary: #82ACD6;
-            --primary-hover: #00808E;
-            --accent: #00808E;
-            --danger: #E4E348;
-            --bg-body: #D3E2F3;
-            --bg-card: #FFFFFF;
-            --text-main: #232D63;
-            --text-muted: #232D63;
-            --border: #BBBDB7;
-            --radius: 16px;
-            --sidebar-width: 280px;
-            --admin-accent: #00808E;
-        }
+        <?php renderBrandStyles(); ?>
         * { box-sizing: border-box; }
         body { margin: 0; background-color: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
         main { margin-left: var(--sidebar-width); flex: 1; padding: 48px 64px; width: 100%; }
@@ -245,7 +232,7 @@ $servePreviewUrl = function (int $pkgId): string {
         .small { font-size: 0.8rem; }
         .mono { font-family: 'Consolas', 'Courier New', monospace; font-size: 0.8rem; color: #64748b; }
         .file-drop { border: 2px dashed var(--border); border-radius: 12px; padding: 40px; text-align: center; cursor: pointer; transition: 0.2s; color: var(--text-muted); }
-        .file-drop:hover, .file-drop.dragover { border-color: var(--primary); background: rgba(0, 128, 142, 0.08); color: var(--text-main); }
+        .file-drop:hover, .file-drop.dragover { border-color: var(--primary); background: rgba(0, 111, 83, 0.08); color: var(--text-main); }
 
         /* Upload progress bar */
         .upload-progress-wrap { display: none; margin-top: 16px; padding: 16px 18px; background: #f8fafc; border: 1px solid var(--border); border-radius: 12px; }
@@ -253,7 +240,7 @@ $servePreviewUrl = function (int $pkgId): string {
         .upload-progress-label { display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; font-weight: 700; margin-bottom: 8px; }
         .upload-progress-label .pct { color: var(--primary); }
         .upload-progress-bar { background: #e2e8f0; border-radius: 999px; height: 12px; overflow: hidden; }
-        .upload-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #82ACD6, #00808E); border-radius: 999px; transition: width 0.2s ease; }
+        .upload-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #006F53, #60B49A); border-radius: 999px; transition: width 0.2s ease; }
         .upload-progress-status { margin-top: 8px; font-size: 0.78rem; color: var(--text-muted); }
         .upload-result-ok { margin-top: 10px; padding: 10px 14px; background: #dcfce7; color: #166534; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }
         .upload-result-error { margin-top: 10px; padding: 10px 14px; background: #fee2e2; color: #991b1b; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }

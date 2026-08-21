@@ -41,11 +41,11 @@ function isActive(string $path): string {
             <a href="<?php echo buildUrl('user-management'); ?>" class="nav-link admin-link<?php echo isActive('/user-management'); ?>" data-tour="tour-users">User Management</a>
             <a href="<?php echo buildUrl('user-management/security-audit.php'); ?>" class="nav-link admin-link<?php echo isActive('/user-management/security-audit'); ?>" data-tour="tour-security-audit">Security Audit</a>
             <a href="<?php echo buildUrl('admin-progress'); ?>" class="nav-link admin-link<?php echo isActive('/admin-progress'); ?>" data-tour="tour-admin-progress">Admin Progress</a>
-            <a href="<?php echo buildUrl('analytics/organization'); ?>" class="nav-link admin-link<?php echo isActive('/analytics/organization'); ?>" data-tour="org-analytics">Org Analytics</a>
+            <a href="<?php echo buildUrl('analytics/organization') . '/'; ?>" class="nav-link admin-link<?php echo isActive('/analytics/organization'); ?>" data-tour="org-analytics">Org Analytics</a>
             <a href="<?php echo buildUrl('admin-course-manager'); ?>" class="nav-link admin-link<?php echo isActive('/admin-course-manager'); ?>" data-tour="scorm-packages">Course Manager</a>
             <a href="<?php echo buildUrl('admin-demo-manager'); ?>" class="nav-link admin-link<?php echo isActive('/admin-demo-manager'); ?>">Demo Manager</a>
             <?php if ($sidebarRole === 'super_admin'): ?>
-                <a href="<?php echo buildUrl('analytics/super-admin'); ?>" class="nav-link admin-link<?php echo isActive('/analytics/super-admin'); ?>" data-tour="cross-org">Cross-Org Analytics</a>
+                <a href="<?php echo buildUrl('analytics/super-admin') . '/'; ?>" class="nav-link admin-link<?php echo isActive('/analytics/super-admin'); ?>" data-tour="cross-org">Cross-Org Analytics</a>
                 <a href="<?php echo buildUrl('organizations'); ?>" class="nav-link admin-link<?php echo isActive('/organizations'); ?>" data-tour="tour-orgs">Organizations</a>
             <?php endif; ?>
         <?php endif; ?>

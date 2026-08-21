@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * NATIVE SCORM READER — SCORM Content Server (Phase 1)
  *
  * Serves static assets (HTML, JS, CSS, media, etc.) from uploaded SCORM

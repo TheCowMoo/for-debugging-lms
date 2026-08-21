@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * USER MANAGEMENT - FULL SYSTEM
  */
 
@@ -75,7 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <p>You have been invited to access the <strong>{$siteName}</strong> Training Portal.</p>
                 <p>Complete your registration:</p>
                 <div style='margin: 30px 0;'>
-                    <a href='{$inviteLink}' style='background:#82ACD6; color:#fff; padding:12px 24px; text-decoration:none; border-radius:8px; font-weight:bold;'>Accept Invitation & Sign Up</a>
+                    <a href='{$inviteLink}' style='background:#006F53; color:#fff; padding:12px 24px; text-decoration:none; border-radius:8px; font-weight:bold;'>Accept Invitation & Sign Up</a>
                 </div>
                 <p style='font-size:12px; color:#5f6f6a;'>If the link doesn't work, copy this: <br> {$inviteLink}</p>
             </div>";
@@ -358,24 +358,11 @@ $registrations = fetchScormRegistrations();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Users | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <style>
-        :root {
-            --primary: #82ACD6;
-            --link: #00808E;
-            --accent: #00808E;
-            --danger: #E4E348;
-            --bg-body: #D3E2F3;
-            --bg-card: #FFFFFF;
-            --text-main: #232D63;
-            --text-muted: #232D63;
-            --border: #BBBDB7;
-            --radius: 16px;
-            --sidebar-width: 280px;
-            --admin-accent: #00808E;
-        }
+        <?php renderBrandStyles(); ?>
 
         * { box-sizing: border-box; }
         body { margin: 0; background-color: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }

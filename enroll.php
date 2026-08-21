@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * ENROLLMENT HANDLER - Creates course registrations
  */
 

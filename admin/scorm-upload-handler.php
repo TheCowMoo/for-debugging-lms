@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * NATIVE SCORM READER — Package Upload Handler (Phase 1)
  *
  * Receives a SCORM .zip package, validates it, creates DB records,

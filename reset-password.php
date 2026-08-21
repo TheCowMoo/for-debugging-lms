@@ -71,10 +71,11 @@ try {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Set New Password | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root { --primary: #82ACD6; --primary-hover: #00808E; --bg: #D3E2F3; --text: #232D63; --border: #BBBDB7; --accent: #00808E; --danger: #E4E348; }
+        <?php renderBrandStyles(); ?>
+        :root { --border: #BBBDB7; --accent: #60B49A; }
         body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
         .card { background: #fff; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 420px; text-align: center; }
         .logo-img { max-width: 220px; margin-bottom: 20px; }

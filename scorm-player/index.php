@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS — SCORM Player
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS — SCORM Player
  *
  * Wraps the native SCORM reader (scorm-content/serve.php) in a full-screen
  * player with a top bar, loader, and a user-facing debug overlay that
@@ -145,14 +145,14 @@ if ($showDiag) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo htmlspecialchars($pkg['title']); ?> | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; overflow: hidden; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; }
 
         .player-bar {
             height: 52px;
-            background: #232D63;
+            background: #1A2E2A;
             color: #fff;
             display: flex;
             align-items: center;
@@ -189,7 +189,7 @@ if ($showDiag) {
             transition: 0.2s;
         }
         .player-bar .btn:hover { background: rgba(255,255,255,0.22); }
-        .player-bar .btn-exit { background: #E4E348; color: #232D63; border-color: transparent; }
+        .player-bar .btn-exit { background: #E4E348; color: #1A2E2A; border-color: transparent; }
         .player-bar .btn-exit:hover { background: #d9d93d; }
 
         .player-frame-wrap { height: calc(100% - 52px); width: 100%; position: relative; }
@@ -204,7 +204,7 @@ if ($showDiag) {
         .player-loader {
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: #D3E2F3;
+            background: #F4F9F7;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -215,13 +215,13 @@ if ($showDiag) {
         .spinner {
             width: 42px; height: 42px;
             border: 3px solid #BBBDB7;
-            border-top-color: #82ACD6;
+            border-top-color: #006F53;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
             margin: 0 auto 14px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .player-loader p { color: #232D63; font-size: 0.9rem; text-align: center; }
+        .player-loader p { color: #1A2E2A; font-size: 0.9rem; text-align: center; }
 
         /* ── Debug / Error Overlay ── */
         .debug-overlay {
@@ -308,9 +308,9 @@ if ($showDiag) {
             text-decoration: none;
             display: inline-block;
         }
-        .debug-overlay .btn-retry { background: #232D63; color: #fff; }
+        .debug-overlay .btn-retry { background: #1A2E2A; color: #fff; }
         .debug-overlay .btn-retry:hover { background: #1a2150; }
-        .debug-overlay .btn-exit { background: #E4E348; color: #232D63; }
+        .debug-overlay .btn-exit { background: #E4E348; color: #1A2E2A; }
         .debug-overlay .btn-exit:hover { background: #d9d93d; }
         .debug-overlay .btn-details { background: #f0f0f0; color: #333; }
         .debug-overlay .btn-details:hover { background: #e0e0e0; }
@@ -353,7 +353,7 @@ if ($showDiag) {
         .diag-panel.visible { display: block; }
         .diag-panel h3 {
             margin: 0 0 10px;
-            color: #82ACD6;
+            color: #006F53;
             font-size: 0.9rem;
             letter-spacing: 0.05em;
             text-transform: uppercase;
@@ -381,7 +381,7 @@ if ($showDiag) {
             padding: 8px 14px;
             border-radius: 8px;
             border: none;
-            background: #232D63;
+            background: #1A2E2A;
             color: #fff;
             font-weight: 700;
             cursor: pointer;

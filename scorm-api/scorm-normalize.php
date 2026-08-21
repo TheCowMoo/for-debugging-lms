@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * CROSS-VERSION SCORM NORMALIZATION HELPERS
  *
  * Pure functions shared by scorm-api/store.php, the analytics helpers, and the
@@ -187,7 +187,7 @@ if (!function_exists('scormNormalizeStatuses')) {
 
         // ---- Normalized completion ----
         $normalizedCompletion = '';
-        if (in_array($completion, ['completed', 'passed'], true)) {
+        if (in_array($completion, ['completed', 'passed', 'failed'], true)) {
             $normalizedCompletion = 'completed';
         } elseif ($completion === 'incomplete') {
             $normalizedCompletion = 'incomplete';
@@ -217,20 +217,22 @@ if (!function_exists('scormNormalizeStatuses')) {
         }
 
         // ---- Score-based pass inference (documented, derived) ----
+        // `source` is only recorded when a pass is ACTUALLY derived from the
+        // score — a completed-but-below-threshold attempt keeps source='status'.
         $source = 'status';
         if ($normalizedSuccess === '' && $normalizedCompletion === 'completed') {
             $passThreshold = null;
             if ($is2004 && $scaledPassingScore !== null && $scaledPassingScore !== '') {
                 $passThreshold = (float)$scaledPassingScore;
-                $source = 'scaled_passing_score';
                 if ($scoreScaledVal !== null && $scoreScaledVal >= $passThreshold) {
                     $normalizedSuccess = 'passed';
+                    $source = 'scaled_passing_score';
                 }
             } elseif ($masteryScore !== null && $masteryScore !== '') {
                 $passThreshold = (float)$masteryScore;
-                $source = 'mastery_score';
                 if ($scoreRawVal !== null && $scoreRawVal >= $passThreshold) {
                     $normalizedSuccess = 'passed';
+                    $source = 'mastery_score';
                 }
             }
         }
@@ -265,6 +267,131 @@ if (!function_exists('scormNormalizeStatuses')) {
             'source'     => $source,
             'state'      => $state,
         ];
+    }
+}
+
+if (!function_exists('scormProgressFromSuspendData')) {
+    /**
+     * Best-effort progress decoder for Articulate Storyline 360 / Rise suspend_data.
+     *
+     * Storyline 360 SCORM 2004 (and Rise 360) persist their `story` object in
+     * cmi.suspend_data as base64-encoded JSON:
+     *   {"story":{"state":[{"id":"...","name":"Slide 1","type":"slide",
+     *                       "visited":true,"slide":"...","time":123}, ...]}}
+     * Each story.state entry is one slide (or layer) carrying a `visited` flag.
+     * We count visited / total slide-like entries and return a 0..1 float.
+     *
+     * Returns null when the format is not recognisable — callers must fall back
+     * to other signals rather than inventing a percentage.
+     *
+     * @param string $raw Raw cmi.suspend_data value.
+     * @return float|null 0..1 progress, or null when unparseable.
+     */
+    function scormProgressFromSuspendData(string $raw): ?float
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+        $candidates = [$raw];
+        // Some Rise exports URL-encode the JSON before storing it.
+        if (strpos($raw, '%') !== false) {
+            $candidates[] = rawurldecode($raw);
+        }
+        // Storyline base64-encodes the JSON blob.
+        $b64 = base64_decode($raw, true);
+        if ($b64 !== false && $b64 !== '') {
+            $candidates[] = $b64;
+        }
+
+        foreach ($candidates as $cand) {
+            $data = json_decode($cand, true);
+            if (!is_array($data)) {
+                continue;
+            }
+            $state = $data['story']['state'] ?? null;
+            if (!is_array($state) || $state === []) {
+                $state = scormFindSlideStateArray($data);
+            }
+            $amount = scormCountVisitedSlides($state);
+            if ($amount !== null) {
+                return $amount;
+            }
+        }
+        return null;
+    }
+}
+
+if (!function_exists('scormFindSlideStateArray')) {
+    /**
+     * Recursively locate the first array whose entries carry a visited-like
+     * flag (the slide-state list). Storyline nests it under story.state; some
+     * Rise exports place it elsewhere, so we scan defensively.
+     *
+     * @param mixed $node
+     * @return array|null
+     */
+    function scormFindSlideStateArray($node): ?array
+    {
+        if (!is_array($node)) {
+            return null;
+        }
+        foreach ($node as $val) {
+            if (!is_array($val)) {
+                continue;
+            }
+            if (scormCountVisitedSlides($val) !== null) {
+                return $val;
+            }
+            $found = scormFindSlideStateArray($val);
+            if ($found !== null) {
+                return $found;
+            }
+        }
+        return null;
+    }
+}
+
+if (!function_exists('scormCountVisitedSlides')) {
+    /**
+     * Count visited / total entries in a slide-state list.
+     *
+     * Only entries that expose a visited-like flag are counted (filters out
+     * non-slide children), and explicit layer/dialog/popup entries are excluded
+     * so pop-up layers don't inflate the denominator. Returns null when nothing
+     * slide-like is present.
+     *
+     * @param mixed $state
+     * @return float|null
+     */
+    function scormCountVisitedSlides($state): ?float
+    {
+        if (!is_array($state) || $state === []) {
+            return null;
+        }
+        $total = 0;
+        $visited = 0;
+        foreach ($state as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $type = isset($entry['type']) ? strtolower((string)$entry['type']) : '';
+            if (in_array($type, ['layer', 'dialog', 'popup'], true)) {
+                continue; // non-slide overlay — not part of slide progress
+            }
+            $flag = $entry['visited'] ?? $entry['visitedData'] ?? $entry['isVisited'] ?? $entry['viewed'] ?? null;
+            if ($flag === null) {
+                continue; // not a slide-state entry
+            }
+            $total++;
+            if ($flag === true || $flag === 1 || $flag === '1' || $flag === 'true') {
+                $visited++;
+            }
+        }
+        if ($total === 0) {
+            return null;
+        }
+        return round($visited / $total, 4);
     }
 }
 

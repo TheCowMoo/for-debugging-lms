@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * CROSS-VERSION SCORM TRACKING RECEIVER (v3)
  *
  * Receives persist calls from scorm-rte.js (inside SCORM content) and persists
@@ -386,6 +386,19 @@ if ($reportedProgress !== null) {
 } else {
     $progressSource = 'none';
 }
+// SCORM 2004 accuracy: when the package does not report cmi.progress_measure
+// but its Storyline/Rise suspend_data carries slide bookmarks (visited/total),
+// derive a defensible progress percentage so dashboards and analytics show real
+// progress for in-progress courses instead of 0%. Provenance is recorded in
+// progress_source; reported_progress_measure stays NULL (never claimed as
+// package-reported).
+if ($reportedProgress === null && $progressSource === 'none' && $suspend !== '') {
+    $derivedProgress = scormProgressFromSuspendData($suspend);
+    if ($derivedProgress !== null && $derivedProgress > 0) {
+        $progress = $derivedProgress;
+        $progressSource = 'storyline_suspend';
+    }
+}
 $progressCalcAt = $now;
 
 // ── Step 5: begin transaction ──
@@ -522,6 +535,57 @@ try {
         $resumeState = scormStoreBuildResume($pdo, $attemptId, $version, $edition);
         // Accumulate incremental delta (no double-counting — RTE sends deltas).
         $responseTotalSeconds = $prevTotal + $sessionSeconds;
+
+        // Preserve stored resume state on a values-less Initialize. The RTE's
+        // first request on resume carries no scalars (nothing SetValue'd yet);
+        // applying them blindly would wipe suspend_data / lesson_location /
+        // progress / statuses from the attempt row.
+        if ($priorState !== null) {
+            if (!array_key_exists('cmi.suspend_data', $normalized)) {
+                $suspend = (string)($priorState['suspend_data'] ?? $suspend);
+            }
+            if (!array_key_exists('cmi.core.lesson_location', $normalized)
+                && !array_key_exists('cmi.location', $normalized)) {
+                $location = (string)($priorState['lesson_location'] ?? $location);
+            }
+            if (!array_key_exists('cmi.core.entry', $normalized)
+                && !array_key_exists('cmi.entry', $normalized)) {
+                $entry = (string)($priorState['entry'] ?? $entry);
+            }
+            if (!array_key_exists('cmi.progress_measure', $normalized)
+                && ($progress === null || $progress === '')
+                && !empty($priorState['progress_measure'])) {
+                $progress = $priorState['progress_measure'];
+                $reportedProgress = null;
+                $progressSource = (string)($priorState['progress_source'] ?? $progressSource);
+            }
+            if (!array_key_exists('cmi.core.score.raw', $normalized) && !array_key_exists('cmi.score.raw', $normalized)) {
+                $scoreRaw = $priorState['score_raw'] ?? $scoreRaw;
+            }
+            if (!array_key_exists('cmi.score.scaled', $normalized)) {
+                $scoreScaled = $priorState['score_scaled'] ?? $scoreScaled;
+            }
+            if (!array_key_exists('cmi.core.score.min', $normalized) && !array_key_exists('cmi.score.min', $normalized)) {
+                $scoreMin = $priorState['score_min'] ?? $scoreMin;
+            }
+            if (!array_key_exists('cmi.core.score.max', $normalized) && !array_key_exists('cmi.score.max', $normalized)) {
+                $scoreMax = $priorState['score_max'] ?? $scoreMax;
+            }
+            if (!array_key_exists('cmi.core.lesson_status', $normalized)
+                && !array_key_exists('cmi.completion_status', $normalized)
+                && !array_key_exists('cmi.success_status', $normalized)) {
+                $rawLessonStatus = (string)($priorState['lesson_status'] ?? $rawLessonStatus);
+                $rawCompletion = (string)($priorState['completion_status'] ?? $rawCompletion);
+                $rawSuccess = (string)($priorState['success_status'] ?? $rawSuccess);
+                $norm = [
+                    'completion' => (string)($priorState['normalized_completion'] ?? $norm['completion']),
+                    'success'    => (string)($priorState['normalized_success'] ?? $norm['success']),
+                    'source'     => (string)($priorState['status_source'] ?? $norm['source']),
+                    'state'      => (string)($priorState['attempt_state'] ?? $norm['state']),
+                ];
+                $isComplete = (int)($priorState['is_complete'] ?? $isComplete);
+            }
+        }
 
         $update = $pdo->prepare("UPDATE scorm_attempts SET
             lesson_status = ?,

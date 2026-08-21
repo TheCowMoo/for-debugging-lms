@@ -147,6 +147,7 @@ define('S3_ENDPOINT', getenv('S3_ENDPOINT') ?: '');
 define('S3_DEBUG', getenv('S3_DEBUG') === '1');
 define('S3_PREFIX', getenv('S3_PREFIX') ?: 'scorm-content/');
 require_once __DIR__ . '/s3-helpers.php';
+require_once __DIR__ . '/includes/brand.php';
 
 // —— reCAPTCHA (Anti-bot) ——
 define('RECAPTCHA_SITE_KEY', getenv('RECAPTCHA_SITE_KEY') ?: '6Le9sXgtAAAAAE5KUjvUpYAcpVPCx9ncgAEyAEyt');
@@ -325,18 +326,18 @@ define('IS_LOCALHOST', $IS_LOCALHOST);
 
 function getSiteName(): string
 {
-    return getenv('SITE_NAME') ?: 'Pursuit Pathways';
+    return ppBrand()['name'];
 }
 
 function getLogoUrl(): string
 {
-    $filename = getenv('LOGO_FILENAME') ?: 'PPlogo-C-450x1200px-T (1).png';
+    $filename = ppBrand()['logo'];
     return buildUrl('content/' . $filename);
 }
 
 function getFaviconUrl(): string
 {
-    $filename = getenv('FAVICON_FILENAME') ?: 'PPicon-C.svg';
+    $filename = ppBrand()['favicon'];
     return buildUrl('content/' . $filename);
 }
 

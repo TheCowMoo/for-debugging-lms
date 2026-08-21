@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SCORM Upload Background Runner (HTTP endpoint)
  *
  * Called asynchronously (fire-and-forget) by scorm-upload-handler.php via

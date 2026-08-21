@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SCORM Upload Job Status Endpoint
  *
  * GET ?job_id=<id>

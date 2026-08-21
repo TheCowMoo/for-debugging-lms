@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SCORM VENDOR FIXTURE REGISTRY
  *
  * A data-only registry of known authoring-tool export behaviours. This is NOT

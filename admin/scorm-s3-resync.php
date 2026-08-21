@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SCORM S3 Re-Sync Tool (JSON API)
  *
  * Scans the local extracted directory for one or all SCORM packages and

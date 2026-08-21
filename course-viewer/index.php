@@ -19,10 +19,11 @@ $dashboard_url = buildUrl('dashboard/');
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Learning Portal | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root { --primary: #82ACD6; --primary-hover: #00808E; --bg: #0f172a; --text-main: #ffffff; }
+        <?php renderBrandStyles(); ?>
+        :root { --bg: #0f172a; --text-main: #ffffff; }
         *, *::before, *::after { box-sizing: border-box; }
         body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background: var(--bg); font-family: 'Plus Jakarta Sans', sans-serif; }
 

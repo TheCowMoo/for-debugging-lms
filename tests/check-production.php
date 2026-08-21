@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS — Production deployment guard.
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS — Production deployment guard.
  *
  * Run BEFORE packaging/deploying the web tree, e.g.:
  *

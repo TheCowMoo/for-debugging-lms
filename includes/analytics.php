@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * ANALYTICS HELPERS — Native SCORM Data
  *
  * Provides analytics/aggregation functions used by:

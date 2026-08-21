@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SCORM NORMALIZATION UNIT TESTS
  *
  * Pure-function tests for scorm-api/scorm-normalize.php. No database access.
@@ -100,5 +100,41 @@ t_assert(scormDetectEdition('<manifest xmlns="http://www.adlnet.org/xsd/adlcp_v1
 t_assert(scormDetectEdition('<manifest xmlns="http://www.adlnet.org/xsd/adlcp_rootv1p2">') === '1.2', 'adlcp_rootv1p2 -> 1.2');
 t_assert(scormDetectEdition('<manifest xmlns="http://www.unknown.example/ns">') === '', 'unknown namespace -> empty');
 t_assert(scormDetectEdition('') === '', 'empty manifest -> empty');
+
+echo "8. Storyline suspend_data progress (SCORM 2004 accuracy)\n";
+t_assert(scormProgressFromSuspendData('') === null, 'empty -> null');
+t_assert(scormProgressFromSuspendData('garbage') === null, 'unparseable -> null');
+t_assert(scormProgressFromSuspendData('{"foo":{"bar":42}}') === null, 'no slide state -> null');
+$story = json_encode(['story' => ['state' => [
+    ['id' => 'a', 'name' => 'Slide 1', 'type' => 'slide', 'visited' => true, 'slide' => 'x1', 'time' => 12000],
+    ['id' => 'b', 'name' => 'Slide 2', 'type' => 'slide', 'visited' => true, 'slide' => 'x2', 'time' => 8000],
+    ['id' => 'c', 'name' => 'Slide 3', 'type' => 'slide', 'visited' => false, 'slide' => 'x3', 'time' => 0],
+]]]);
+t_assert(scormProgressFromSuspendData(base64_encode($story)) === 0.6667, 'base64 story 2/3 visited -> 0.6667');
+t_assert(scormProgressFromSuspendData($story) === 0.6667, 'raw JSON story 2/3 visited -> 0.6667');
+$all = json_encode(['story' => ['state' => [
+    ['id' => 'a', 'name' => 'Slide 1', 'type' => 'slide', 'visited' => true],
+    ['id' => 'b', 'name' => 'Slide 2', 'type' => 'slide', 'visited' => true],
+]]]);
+t_assert(scormProgressFromSuspendData(base64_encode($all)) === 1.0, 'all visited -> 1.0');
+$none = json_encode(['story' => ['state' => [
+    ['id' => 'a', 'name' => 'Slide 1', 'type' => 'slide', 'visited' => false],
+    ['id' => 'b', 'name' => 'Slide 2', 'type' => 'slide', 'visited' => false],
+]]]);
+t_assert(scormProgressFromSuspendData(base64_encode($none)) === 0.0, 'none visited -> 0.0');
+// Layers must not inflate the slide denominator.
+$withLayer = json_encode(['story' => ['state' => [
+    ['id' => 'l', 'name' => 'Pop-up layer', 'type' => 'layer', 'visited' => true],
+    ['id' => 'a', 'name' => 'Slide 1', 'type' => 'slide', 'visited' => true],
+    ['id' => 'b', 'name' => 'Slide 2', 'type' => 'slide', 'visited' => false],
+]]]);
+t_assert(scormProgressFromSuspendData(base64_encode($withLayer)) === 0.5, 'layer excluded -> 0.5');
+// Alternative visited flag spellings used by some Rise exports.
+$alt = json_encode(['bookmarks' => [
+    ['id' => '1', 'name' => 'S1', 'visitedData' => true],
+    ['id' => '2', 'name' => 'S2', 'visitedData' => true],
+    ['id' => '3', 'name' => 'S3', 'visitedData' => false],
+]]);
+t_assert(scormProgressFromSuspendData(base64_encode($alt)) === 0.6667, 'visitedData fallback + recursive find -> 0.6667');
 
 $GLOBALS['__tests']['fail'] > 0 ? exit(1) : exit(0);

@@ -171,22 +171,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audit Records | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <style>
-        :root {
-            --primary: #82ACD6;
-            --link: #00808E;
-            --accent: #00808E;
-            --bg-body: #D3E2F3;
-            --bg-card: #ffffff;
-            --text-main: #232D63;
-            --text-muted: #232D63;
-            --border: #BBBDB7;
-            --radius: 16px;
-            --sidebar-width: 280px;
-        }
+        <?php renderBrandStyles(); ?>
         * { box-sizing: border-box; }
         body { margin: 0; padding: 0; min-height: 100vh; background: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; }
         main { margin-left: var(--sidebar-width); width: 100%; padding: 48px 64px; transition: 0.3s; }
@@ -225,7 +214,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 
         .export-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 24px; }
         .btn-export { display: inline-flex; align-items: center; gap: 8px; padding: 12px 24px; background: var(--primary); color: #fff; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
-        .btn-export:hover { background: #00808E; }
+        .btn-export:hover { background: #60B49A; }
         .btn-print { display: inline-flex; align-items: center; gap: 8px; padding: 12px 24px; background: #fff; color: var(--text-main); border: 1px solid var(--border); border-radius: 12px; font-weight: 700; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
         .btn-print:hover { background: var(--bg-body); }
 

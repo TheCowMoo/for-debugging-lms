@@ -1,21 +1,21 @@
 /* ==========================================================
-   PP LMS — Shared Main Stylesheet
+   HPCAS LMS — Shared Main Stylesheet
    Import this BEFORE page-specific styles
    ========================================================== */
 
 :root {
-    --primary: #82ACD6;
-    --primary-hover: #00808E;
-    --accent: #00808E;
+    --primary: #006F53;
+    --primary-hover: #60B49A;
+    --accent: #A3D7C5;
     --danger: #E4E348;
-    --bg-body: #D3E2F3;
+    --bg-body: #F4F9F7;
     --bg-card: #FFFFFF;
-    --text-main: #232D63;
-    --text-muted: #232D63;
-    --border: #BBBDB7;
+    --text-main: #1A2E2A;
+    --text-muted: #8FA89E;
+    --border: #A3D7C5;
     --radius: 12px;
     --sidebar-width: 280px;
-    --admin-accent: #00808E;
+    --admin-accent: #60B49A;
 }
 
 * { box-sizing: border-box; }
@@ -78,10 +78,10 @@ h1, h2, h3, h4, h5, h6 { margin-top: 0; }
     border-radius: 999px;
     transition: width 0.4s ease;
 }
-.progress-bar-fill.primary { background: #82ACD6; }
+.progress-bar-fill.primary { background: #006F53; }
 .progress-bar-fill.warning { background: #E4E348; }
-.progress-bar-fill.danger  { background: #00808E; }
-.progress-bar-fill.success { background: #82ACD6; }
+.progress-bar-fill.danger  { background: #60B49A; }
+.progress-bar-fill.success { background: #006F53; }
 
 /* ---- BUTTONS ---- */
 .btn-primary {

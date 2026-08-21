@@ -1,7 +1,7 @@
 <?php
 /**
  * FORGOT PASSWORD REQUEST (forgot-password.php)
- * Branding: Pursuit Pathways
+ * Branding: Huron-Perth Children's Aid Society
  */
 require_once __DIR__ . '/../bootstrap.php';
 require_once __DIR__ . '/../signup/ghl_helper.php';
@@ -43,11 +43,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $subject = "Password Reset - $siteName";
                 $htmlBody = "
                     <div style='font-family: sans-serif; max-width: 600px; border: 1px solid #d9e3df; padding: 25px; border-radius: 12px;'>
-                        <h2 style='color: #82ACD6;'>Reset Your Password</h2>
+                        <h2 style='color: #006F53;'>Reset Your Password</h2>
                         <p>Hello " . htmlspecialchars($user['first_name']) . ",</p>
                         <p>You requested a password reset for your {$siteName} account. Click the button below to continue:</p>
                         <div style='text-align: center; margin: 30px 0;'>
-                            <a href='{$reset_link}' style='background: #82ACD6; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;'>Reset Password</a>
+                            <a href='{$reset_link}' style='background: #006F53; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;'>Reset Password</a>
                         </div>
                         <p style='color: #5f6f6a; font-size: 13px;'>Link expires in 1 hour.</p>
                     </div>";
@@ -72,25 +72,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Forgot Password | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://www.google.com/recaptcha/api.js?render=<?php echo RECAPTCHA_SITE_KEY; ?>"></script>
     <style>
-        :root {
-            --primary: #82ACD6;
-            --primary-hover: #00808E;
-            --accent: #00808E;
-            --danger: #E4E348;
-            --bg-body: #D3E2F3;
-            --bg-card: #FFFFFF;
-            --text-main: #232D63;
-            --text-muted: #232D63;
-            --border: #BBBDB7;
-            --success: #15803d;
-            --bg-success: #f0fdf4;
-            --error: #b91c1c;
-            --bg-error: #fef2f2;
-        }
+        <?php renderBrandStyles(); ?>
 
         body { 
             font-family: 'Plus Jakarta Sans', sans-serif; 

@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * Multi-Course Library View - Mobile Responsive
  */
 
@@ -49,25 +49,12 @@ if ($launchMode && empty($courseUrl)) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Courses | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/main.css'); ?>">
     <style>
-        :root {
-            --primary: #82ACD6;
-            --primary-hover: #00808E;
-            --accent: #00808E;
-            --danger: #E4E348;
-            --bg-body: #D3E2F3;
-            --bg-card: #FFFFFF;
-            --text-main: #232D63;
-            --text-muted: #232D63;
-            --border: #BBBDB7;
-            --radius: 12px;
-            --sidebar-width: 280px;
-            --admin-accent: #00808E;
-        }
+        <?php renderBrandStyles(); ?>
 
         * { box-sizing: border-box; }
         body { margin: 0; background-color: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
@@ -113,14 +100,14 @@ if ($launchMode && empty($courseUrl)) {
         .scorm-loader-overlay {
             position: fixed; inset: 0; z-index: 999;
             display: flex; align-items: center; justify-content: center;
-            background: #D3E2F3; transition: opacity 0.5s ease;
+            background: #F4F9F7; transition: opacity 0.5s ease;
         }
         .scorm-loader-spinner {
             width: 40px; height: 40px;
-            border: 3px solid #BBBDB7; border-top-color: #82ACD6;
+            border: 3px solid #BBBDB7; border-top-color: #006F53;
             border-radius: 50%; animation: scorm-spin 0.8s linear infinite;
         }
-        .scorm-loader-text { margin-top: 12px; color: #232D63; font-size: 14px; }
+        .scorm-loader-text { margin-top: 12px; color: #1A2E2A; font-size: 14px; }
         #scorm-frame {
             position: fixed; top: 0; left: var(--sidebar-width, 280px);
             width: calc(100% - var(--sidebar-width, 280px)); height: 100%;

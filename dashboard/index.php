@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * FULL INTEGRATED DASHBOARD (index.php)
  * Updated to match the Uniformed Analytics sidebar and mobile responsiveness.
  */
@@ -128,26 +128,13 @@ $thumbnail = courseThumbnailUrl(getCourseThumbnailFile($courseId, $courseTitle))
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/main.css'); ?>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root {
-            --primary: #82ACD6;
-            --primary-hover: #00808E;
-            --accent: #00808E;
-            --danger: #E4E348;
-            --bg-body: #D3E2F3;
-            --bg-card: #FFFFFF;
-            --text-main: #232D63;
-            --text-muted: #232D63;
-            --border: #BBBDB7;
-            --radius: 16px;
-            --sidebar-width: 280px;
-            --admin-accent: #00808E;
-        }
+        <?php renderBrandStyles(); ?>
 
         * { box-sizing: border-box; }
         body { margin: 0; background-color: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
@@ -160,7 +147,7 @@ $thumbnail = courseThumbnailUrl(getCourseThumbnailFile($courseId, $courseTitle))
         header p { color: var(--text-muted); margin-top: 8px; font-size: 1.1rem; }
 
         /* DASHBOARD SPECIFICS */
-        .page-hero { background: linear-gradient(180deg, #232D63 0%, #00808E 100%); color: #ffffff; border-radius: 28px; padding: 24px; box-shadow: 0 35px 70px rgba(0, 128, 142, 0.18); display: grid; grid-template-columns: 1fr; gap: 20px; align-items: center; margin-bottom: 28px; }
+        .page-hero { background: linear-gradient(180deg, #1A2E2A 0%, #006F53 100%); color: #ffffff; border-radius: 28px; padding: 24px; box-shadow: 0 35px 70px rgba(0, 111, 83, 0.18); display: grid; grid-template-columns: 1fr; gap: 20px; align-items: center; margin-bottom: 28px; }
         @media (min-width: 900px) {
             .page-hero { grid-template-columns: 1.7fr 1fr; padding: 34px 36px; gap: 28px; }
         }
@@ -457,7 +444,7 @@ $thumbnail = courseThumbnailUrl(getCourseThumbnailFile($courseId, $courseTitle))
             data: {
                 datasets: [{
                     data: [<?php echo $preparednessScore; ?>, <?php echo (100 - $preparednessScore); ?>],
-                    backgroundColor: ['#82ACD6', '#D3E2F3'],
+                    backgroundColor: ['#006F53', '#F4F9F7'],
                     borderWidth: 0,
                     cutout: '72%'
                 }]
@@ -476,12 +463,12 @@ $thumbnail = courseThumbnailUrl(getCourseThumbnailFile($courseId, $courseTitle))
                 datasets: [{
                     label: 'Preparedness',
                     data: [<?php echo implode(', ', $avgTrendPoints); ?>],
-                    borderColor: '#82ACD6',
+                    borderColor: '#006F53',
                     backgroundColor: 'rgba(130, 172, 214, 0.18)',
                     fill: true,
                     tension: 0.4,
                     pointRadius: 4,
-                    pointBackgroundColor: '#82ACD6'
+                    pointBackgroundColor: '#006F53'
                 }]
             },
             options: {

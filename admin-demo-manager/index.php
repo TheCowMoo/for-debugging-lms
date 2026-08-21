@@ -72,7 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_create'])) {
                 <p>A demo invite link has been created for the course: <strong>" . htmlspecialchars($courseTitle) . "</strong></p>
                 <p>Click on this link to register and access the course:</p>
                 <div style='text-align:center;margin:30px 0;'>
-                    <a href='$inviteLink' style='background:#82ACD6;color:#fff;padding:14px 28px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;'>Open Demo Link</a>
+                    <a href='$inviteLink' style='background:#006F53;color:#fff;padding:14px 28px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;'>Open Demo Link</a>
                 </div>
                 <p style='color:#5f6f6a;font-size:13px;'>Expires in $expiresDays days</p>
                 <p style='color:#5f6f6a;font-size:12px;'>Link: $inviteLink</p>";
@@ -139,24 +139,12 @@ $demoInvites = $pdo->query("
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Demo Manager | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/main.css'); ?>">
     <style>
-        :root {
-            --primary: #82ACD6;
-            --primary-hover: #00808E;
-            --accent: #00808E;
-            --bg-body: #D3E2F3;
-            --bg-card: #FFFFFF;
-            --text-main: #232D63;
-            --text-muted: #232D63;
-            --border: #BBBDB7;
-            --radius: 16px;
-            --sidebar-width: 280px;
-            --admin-accent: #00808E;
-        }
+        <?php renderBrandStyles(); ?>
         * { box-sizing: border-box; }
         body { margin: 0; background: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
         main { margin-left: var(--sidebar-width); flex: 1; padding: 48px 64px; }
@@ -171,7 +159,7 @@ $demoInvites = $pdo->query("
         .form-group { text-align: left; }
         .form-group label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
         .form-group input, .form-group select { width: 100%; padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; font-family: inherit; background: #fff; color: var(--text-main); }
-        .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0, 128, 142, 0.2); }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0, 111, 83, 0.2); }
         .form-full { grid-column: 1 / -1; }
         .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 24px; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; text-decoration: none; font-size: 0.9rem; font-family: inherit; }
         .btn-primary { background: var(--primary); color: #fff; }

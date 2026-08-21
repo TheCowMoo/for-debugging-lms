@@ -26,7 +26,7 @@ $stmt->execute([$_SESSION['user_id']]);
 $dbUser = $stmt->fetch(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
-<html><body style="font-family:sans-serif;padding:40px;background:#D3E2F3;">
+<html><body style="font-family:sans-serif;padding:40px;background:#F4F9F7;">
 <div style="max-width:500px;margin:auto;background:#fff;padding:30px;border-radius:16px;">
     <h2>Session & Role Diagnostics</h2>
     <?php if ($msg): ?><div style="background:#dcfce7;padding:12px;border-radius:8px;margin-bottom:16px;color:#166534;"><?php echo $msg; ?></div><?php endif; ?>
@@ -55,10 +55,10 @@ getOrgId():     <?php echo getOrgId() ?? 'NULL'; ?>
     </pre>
 
     <p style="margin-top:20px;">
-        <a href="?promote=1" style="display:inline-block;background:#82ACD6;color:#fff;padding:12px 24px;border-radius:12px;text-decoration:none;font-weight:700;">Promote me to Super Admin</a>
+        <a href="?promote=1" style="display:inline-block;background:#006F53;color:#fff;padding:12px 24px;border-radius:12px;text-decoration:none;font-weight:700;">Promote me to Super Admin</a>
         <br><br>
-        <a href="promote.php" style="color:#00808E;">Refresh</a> | 
-        <a href="organizations/" style="color:#00808E;">Go to Organizations</a> |
+        <a href="promote.php" style="color:#60B49A;">Refresh</a> | 
+        <a href="organizations/" style="color:#60B49A;">Go to Organizations</a> |
         <a href="logout.php" style="color:#ef4444;">Log Out</a>
     </p>
     <p style="color:#999;font-size:12px;">Delete this file after use: <code>promote.php</code></p>

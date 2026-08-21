@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS — SCORM TEST RUNNER
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS — SCORM TEST RUNNER
  *
  * Runs the automated tests for the cross-version SCORM implementation:
  *   1. Normalization unit tests (php, no DB)

@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SECURITY AUDIT LOG (user-management/security-audit.php)
  *
  * Viewable, filterable history of login attempts, lockouts, MFA events, and
@@ -119,11 +119,12 @@ $auditUrl = buildUrl('user-management/security-audit.php');
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Audit Log | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <style>
-        :root { --primary: #82ACD6; --primary-hover: #00808E; --bg: #D3E2F3; --text: #232D63; --border: #BBBDB7; --radius: 14px; --sidebar-width: 280px; }
+        <?php renderBrandStyles(); ?>
+        :root { --radius: 14px; }
         * { box-sizing: border-box; }
         body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
         main { margin-left: var(--sidebar-width); flex: 1; padding: 40px 48px; }

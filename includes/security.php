@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SECURITY HARDENING HELPERS
  *
  * Account lockout & throttling, security audit logging + admin alerting, and
@@ -547,11 +547,11 @@ if (!function_exists('sendMfaCodeEmail')) {
         $ttl = (int)(getenv('MFA_TTL_MINUTES') ?: 10);
         $subject = "Your $siteName verification code";
         $html = "<div style='font-family:sans-serif;max-width:600px;border:1px solid #d9e3df;padding:25px;border-radius:12px;'>"
-              . "<h2 style='color:#82ACD6;'>Verification Code</h2>"
+              . "<h2 style='color:#006F53;'>Verification Code</h2>"
               . '<p>Hello ' . htmlspecialchars($name) . ',</p>'
               . '<p>Use the code below to complete your sign-in to ' . htmlspecialchars($siteName) . ':</p>'
               . "<div style='text-align:center;margin:24px 0;'>"
-              . "<span style='font-size:28px;font-weight:800;letter-spacing:6px;color:#232D63;'>" . htmlspecialchars($code) . "</span></div>"
+              . "<span style='font-size:28px;font-weight:800;letter-spacing:6px;color:#1A2E2A;'>" . htmlspecialchars($code) . "</span></div>"
               . '<p style="color:#5f6f6a;font-size:13px;">This code expires in ' . $ttl . ' minutes. If you did not attempt to sign in, please ignore this email.</p>'
               . '</div>';
         $sent = @sendGHLPortalEmail(

@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * ADVANCED ANALYTICS — Organization (Phase 4)
  *
  * Organization-level dashboard: KPIs, department comparison table,
@@ -65,17 +65,13 @@ $formatter = function(int $seconds): string {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Organization Analytics | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root {
-            --primary: #82ACD6; --primary-hover: #00808E; --accent: #00808E;
-            --bg-body: #D3E2F3; --bg-card: #FFFFFF; --text-main: #232D63;
-            --text-muted: #232D63; --border: #BBBDB7; --radius: 16px;
-            --sidebar-width: 280px;
-        }
+        <?php renderBrandStyles(); ?>
+        :root { --accent: #60B49A; --radius: 16px; }
         * { box-sizing: border-box; }
         body { margin: 0; background: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
         main { margin-left: var(--sidebar-width); flex: 1; padding: 48px 64px; width: 100%; }
@@ -172,7 +168,7 @@ $formatter = function(int $seconds): string {
                             <?php foreach ($departments as $d): ?>
                                 <?php $completionPct = $d['enrollments'] > 0 ? round(($d['completions'] / $d['enrollments']) * 100, 1) : 0; ?>
                                 <tr>
-                                    <td><a href="<?php echo buildUrl('analytics/organization?dept=' . urlencode($d['department'])); ?>" style="color:var(--primary); font-weight:700; text-decoration:none;"><?php echo htmlspecialchars($d['department']); ?></a></td>
+                                    <td><a href="<?php echo buildUrl('analytics/organization') . '/?dept=' . urlencode($d['department']); ?>" style="color:var(--primary); font-weight:700; text-decoration:none;"><?php echo htmlspecialchars($d['department']); ?></a></td>
                                     <td><?php echo (int)$d['learners']; ?></td>
                                     <td><?php echo (int)$d['enrollments']; ?></td>
                                     <td><?php echo (int)$d['completions']; ?></td>
@@ -200,7 +196,7 @@ $formatter = function(int $seconds): string {
                         <h2>Department: <?php echo htmlspecialchars($selectedDept); ?></h2>
                         <div class="dept-nav">
                             <?php foreach ($deptList as $dept): ?>
-                                <a href="<?php echo buildUrl('analytics/organization?dept=' . urlencode($dept)); ?>" class="<?php echo $dept === $selectedDept ? 'active' : ''; ?>"><?php echo htmlspecialchars($dept); ?></a>
+                                <a href="<?php echo buildUrl('analytics/organization') . '/?dept=' . urlencode($dept); ?>" class="<?php echo $dept === $selectedDept ? 'active' : ''; ?>"><?php echo htmlspecialchars($dept); ?></a>
                             <?php endforeach; ?>
                         </div>
                     </div>
@@ -529,22 +525,22 @@ $formatter = function(int $seconds): string {
                     {
                         label: 'Attempts',
                         data: attempts,
-                        borderColor: '#82ACD6',
-                        backgroundColor: 'rgba(0, 128, 142,0.15)',
+                        borderColor: '#006F53',
+                        backgroundColor: 'rgba(0, 111, 83,0.15)',
                         fill: true,
                         tension: 0.4,
                         pointRadius: 4,
-                        pointBackgroundColor: '#82ACD6'
+                        pointBackgroundColor: '#006F53'
                     },
                     {
                         label: 'Completions',
                         data: completions,
-                        borderColor: '#00808E',
+                        borderColor: '#60B49A',
                         backgroundColor: 'rgba(0,128,142,0.1)',
                         fill: true,
                         tension: 0.4,
                         pointRadius: 4,
-                        pointBackgroundColor: '#00808E'
+                        pointBackgroundColor: '#60B49A'
                     }
                 ]
             },
@@ -572,16 +568,16 @@ $formatter = function(int $seconds): string {
                     {
                         label: 'Active Learners',
                         data: dailyUsers,
-                        backgroundColor: 'rgba(0, 128, 142, 0.55)',
-                        borderColor: '#82ACD6',
+                        backgroundColor: 'rgba(0, 111, 83, 0.55)',
+                        borderColor: '#006F53',
                         borderWidth: 1,
                         borderRadius: 4
                     },
                     {
                         label: 'Sessions',
                         data: dailySessions,
-                        backgroundColor: 'rgba(0, 128, 142, 0.4)',
-                        borderColor: '#00808E',
+                        backgroundColor: 'rgba(0, 111, 83, 0.4)',
+                        borderColor: '#60B49A',
                         borderWidth: 1,
                         borderRadius: 4
                     }

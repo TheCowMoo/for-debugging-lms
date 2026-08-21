@@ -78,15 +78,15 @@ function buildVerificationEmail($firstName, $verifyLink, $siteName) {
     $safeLink = htmlspecialchars((string)$verifyLink, ENT_QUOTES, 'UTF-8');
 
     $html = "
-        <div style=\"font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#232D63;\">
+        <div style=\"font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1A2E2A;\">
             <div style=\"text-align:center;padding:24px 0;\">
-                <h1 style=\"margin:0;font-size:20px;color:#232D63;\">{$safeSite}</h1>
+                <h1 style=\"margin:0;font-size:20px;color:#1A2E2A;\">{$safeSite}</h1>
             </div>
-            <div style=\"background:#ffffff;border:1px solid #D3E2F3;border-radius:12px;padding:32px;\">
-                <h2 style=\"margin:0 0 12px;font-size:18px;color:#232D63;\">Hi {$safeName}, welcome to {$safeSite}!</h2>
-                <p style=\"margin:0 0 16px;color:#232D63;line-height:1.6;\">Thanks for creating an account. Please confirm your email address to activate your account and get started.</p>
+            <div style=\"background:#ffffff;border:1px solid #F4F9F7;border-radius:12px;padding:32px;\">
+                <h2 style=\"margin:0 0 12px;font-size:18px;color:#1A2E2A;\">Hi {$safeName}, welcome to {$safeSite}!</h2>
+                <p style=\"margin:0 0 16px;color:#1A2E2A;line-height:1.6;\">Thanks for creating an account. Please confirm your email address to activate your account and get started.</p>
                 <div style=\"text-align:center;margin:28px 0;\">
-                    <a href=\"{$safeLink}\" style=\"background:#82ACD6;color:#ffffff;padding:14px 32px;border-radius:8px;font-weight:bold;text-decoration:none;display:inline-block;\">Confirm My Email</a>
+                    <a href=\"{$safeLink}\" style=\"background:#006F53;color:#ffffff;padding:14px 32px;border-radius:8px;font-weight:bold;text-decoration:none;display:inline-block;\">Confirm My Email</a>
                 </div>
                 <p style=\"margin:0 0 16px;color:#475569;font-size:13px;line-height:1.6;\">If the button doesn't work, copy and paste this link into your browser:</p>
                 <p style=\"margin:0 0 16px;color:#475569;font-size:13px;word-break:break-all;\">{$safeLink}</p>

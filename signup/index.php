@@ -194,11 +194,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Create Account | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://www.google.com/recaptcha/api.js?render=<?php echo RECAPTCHA_SITE_KEY; ?>"></script>
     <style>
-        :root { --primary: #82ACD6; --primary-hover: #00808E; --accent: #00808E; --danger: #E4E348; --bg-body: #D3E2F3; --bg-card: #FFFFFF; --text-main: #232D63; --text-muted: #232D63; --border: #BBBDB7; }
+        <?php renderBrandStyles(); ?>
         body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--bg-body); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; color: var(--text-main); }
         .login-card { background: var(--bg-card); padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); width: 100%; max-width: 440px; text-align: center; margin: 20px; }
         .brand-logo { margin-bottom: 20px; }

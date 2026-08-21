@@ -69,11 +69,12 @@ while ($row = $countStmt->fetch(PDO::FETCH_ASSOC)) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Organizations | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <style>
-        :root { --primary: #82ACD6; --sidebar-width: 280px; --bg-body: #D3E2F3; --bg-card: #FFFFFF; --text-main: #232D63; --text-muted: #232D63; --border: #BBBDB7; --radius: 16px; }
+        <?php renderBrandStyles(); ?>
+        :root { --text-muted: #374151; --border: #BBBDB7; --radius: 16px; }
         * { box-sizing: border-box; }
         body { margin: 0; background-color: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
         main { margin-left: var(--sidebar-width); flex: 1; padding: 48px 64px; }
@@ -83,7 +84,7 @@ while ($row = $countStmt->fetch(PDO::FETCH_ASSOC)) {
         .field label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; }
         .field input, .field select, .field textarea { width: 100%; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; font-size: 0.95rem; font-family: inherit; background: #fff; }
         .btn-primary { background: var(--primary); color: white; border: none; padding: 14px 24px; border-radius: 12px; font-weight: 700; cursor: pointer; }
-        .btn-danger { background: #E4E348; color: #232D63; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .btn-danger { background: #E4E348; color: #1A2E2A; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
         table { width: 100%; border-collapse: collapse; }
         th { background: #f8fafc; text-align: left; padding: 16px 20px; font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; border-bottom: 1px solid var(--border); font-weight: 700; }
         td { padding: 16px 20px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }

@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * ADVANCED ANALYTICS — User Detail (Phase 4)
  *
  * Individual learner view: course summaries, attempt history,
@@ -89,16 +89,12 @@ $formatter = function(int $seconds): string {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Learner Analytics | <?php echo getSiteName(); ?></title>
-    <link rel="icon" type="image/svg+xml" href="<?php echo getFaviconUrl(); ?>">
+    <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
     <style>
-        :root {
-            --primary: #82ACD6; --primary-hover: #00808E; --accent: #00808E;
-            --bg-body: #D3E2F3; --bg-card: #FFFFFF; --text-main: #232D63;
-            --text-muted: #232D63; --border: #BBBDB7; --radius: 16px;
-            --sidebar-width: 280px;
-        }
+        <?php renderBrandStyles(); ?>
+        :root { --accent: #60B49A; --radius: 16px; }
         * { box-sizing: border-box; }
         body { margin: 0; background: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
         main { margin-left: var(--sidebar-width); flex: 1; padding: 48px 64px; width: 100%; }
@@ -174,9 +170,9 @@ $formatter = function(int $seconds): string {
                 <div class="card-header">
                     <h2>Course Summaries</h2>
                     <div class="pkg-filter">
-                        <a href="<?php echo buildUrl('analytics/user?user=' . $userId); ?>" class="<?php echo $packageId === 0 ? 'active' : ''; ?>">All</a>
+                        <a href="<?php echo buildUrl('analytics/user') . '/?user=' . $userId; ?>" class="<?php echo $packageId === 0 ? 'active' : ''; ?>">All</a>
                         <?php foreach ($packages as $p): ?>
-                            <a href="<?php echo buildUrl('analytics/user?user=' . $userId . '&pkg=' . $p['id']); ?>" class="<?php echo $packageId === $p['id'] ? 'active' : ''; ?>"><?php echo htmlspecialchars($p['title']); ?></a>
+                            <a href="<?php echo buildUrl('analytics/user') . '/?user=' . $userId . '&pkg=' . $p['id']; ?>" class="<?php echo $packageId === $p['id'] ? 'active' : ''; ?>"><?php echo htmlspecialchars($p['title']); ?></a>
                         <?php endforeach; ?>
                     </div>
                 </div>

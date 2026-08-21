@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS — SCORM Schema Migration Runner
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS — SCORM Schema Migration Runner
  *
  * Applies pending versioned schema migrations in filename order and records
  * them in `schema_migrations` so each runs exactly once.

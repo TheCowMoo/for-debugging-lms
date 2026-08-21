@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SCORM S3 Re-Sync — CLI version
  *
  * Run directly from the command line as the web user (or with sudo -u www-data).

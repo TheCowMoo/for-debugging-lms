@@ -1,15 +1,15 @@
 :root {
-    --primary: #82ACD6;
-    --primary-hover: #00808E;
-    --accent: #00808E;
-    --bg-body: #D3E2F3;
+    --primary: #006F53;
+    --primary-hover: #60B49A;
+    --accent: #A3D7C5;
+    --bg-body: #F4F9F7;
     --bg-card: #FFFFFF;
-    --text-main: #232D63;
-    --text-muted: #232D63;
-    --border: #BBBDB7;
+    --text-main: #1A2E2A;
+    --text-muted: #8FA89E;
+    --border: #A3D7C5;
     --radius: 12px;
     --sidebar-width: 280px;
-    --admin-accent: #00808E;
+    --admin-accent: #60B49A;
 }
 
 * { box-sizing: border-box; }
@@ -60,10 +60,12 @@ nav#sidebar {
     position: fixed;
     height: 100vh;
     height: 100dvh;
+    overflow: hidden;
     z-index: 1000;
     transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .logo-area {
+    flex: 0 0 auto;
     margin-bottom: 40px;
     text-align: center;
     display: flex;
@@ -95,8 +97,20 @@ nav#sidebar {
 .nav-link:hover { background: var(--bg-body); color: #232D63; }
 .nav-link.active { background: var(--primary); color: #ffffff; }
 .nav-link.admin-link:hover { color: var(--admin-accent); background: rgba(0, 128, 142, 0.12); }
-.logout { margin-top: auto; color: #ef4444; font-weight: 600; text-decoration: none; padding: 12px 16px; border-radius: var(--radius); }
+.logout { margin-top: auto; flex: 0 0 auto; color: #ef4444; font-weight: 600; text-decoration: none; padding: 12px 16px; border-radius: var(--radius); }
 .logout:hover { background: #fef2f2; }
+
+/* Nav links scroll when they exceed the available height (the fixed-height
+   sidebar would otherwise clip links below the fold on short screens). */
+.nav-links-container {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(143, 168, 158, 0.45) transparent;
+}
 
 /* Responsive adjustments */
 @media (max-width: 1024px) {

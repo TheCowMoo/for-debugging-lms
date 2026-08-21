@@ -78,7 +78,7 @@ if ($httpCode !== 200 || $rawHtml === false || $rawHtml === '') {
     } else {
         echo "<p>The course server did not respond correctly (HTTP $httpCode).</p>";
     }
-    echo "<a href='$dashboardUrl' style='padding:10px 20px;background:#82ACD6;color:#fff;text-decoration:none;border-radius:8px;'>Return to Dashboard</a>";
+    echo "<a href='$dashboardUrl' style='padding:10px 20px;background:#006F53;color:#fff;text-decoration:none;border-radius:8px;'>Return to Dashboard</a>";
     echo "</body></html>";
     exit;
 }

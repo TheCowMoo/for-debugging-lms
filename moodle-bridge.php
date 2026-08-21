@@ -29,6 +29,8 @@
  * @version    1.0.0
  */
 
+require_once __DIR__ . '/scorm-api/scorm-normalize.php';
+
 // —— Moodle Configuration (from .env) ——
 
 define('MOODLE_BASE_URL', getenv('MOODLE_BASE_URL') ?: '');
@@ -909,6 +911,100 @@ function nativeFetchScormCourse(string $id): array
 }
 
 /**
+ * Shared registration-completion computation for the native reader backend.
+ *
+ * Completion percentage (0..1) priority:
+ *   1. Server-normalized attempt_state (P5) — completed/passed/failed = 100%.
+ *   2. cmi.progress_measure when the package reports it.
+ *   3. Storyline 360 / Rise suspend_data slide bookmarks (visited / total).
+ *   4. Legacy SCORM 1.2 fallback: score/100 when nothing else is available.
+ *      SCORM 2004 never uses score as progress — success and completion are
+ *      independent signals there, so presenting a score as progress would be
+ *      inaccurate.
+ *
+ * @param array $row A scorm_attempts row (with package title/version joined).
+ * @return array{completionAmount:float, completion:string, resumeAvailable:bool}
+ */
+function scormRegistrationCompletion(array $row): array
+{
+    $completionAmount = 0.0;
+    $completion = 'NOT_ATTEMPTED';
+
+    // Prefer the server-normalized state already computed by store.php.
+    $state = strtolower(trim((string)($row['attempt_state'] ?? '')));
+    if (in_array($state, ['passed', 'failed', 'completed'], true)) {
+        $completion = 'COMPLETED';
+        $completionAmount = 1.0;
+    } elseif (in_array($state, ['in_progress', 'incomplete', 'browsed'], true)) {
+        $completion = 'INCOMPLETE';
+    } else {
+        // Fall back to raw statuses (legacy rows / pre-P5 data).
+        $status = strtolower(trim((string)($row['lesson_status'] ?: ($row['completion_status'] ?: $row['success_status']))));
+        if (in_array($status, ['completed', 'passed'], true)
+            || strtolower(trim((string)($row['completion_status'] ?? ''))) === 'completed') {
+            $completion = 'COMPLETED';
+            $completionAmount = 1.0;
+        } elseif (in_array($status, ['incomplete', 'browsed'], true)) {
+            $completion = 'INCOMPLETE';
+        }
+    }
+
+    if ($completion === 'INCOMPLETE') {
+        // 1) Official cmi.progress_measure (0..1) when the package reports it.
+        if (isset($row['progress_measure']) && $row['progress_measure'] !== null && $row['progress_measure'] !== '') {
+            $completionAmount = max(0.0, min(1.0, (float)$row['progress_measure']));
+        }
+        // 2) Storyline 360 / Rise: derive visited/total slides from suspend_data.
+        if ($completionAmount <= 0) {
+            $derived = scormProgressFromSuspendData((string)($row['suspend_data'] ?? ''));
+            if ($derived !== null) {
+                $completionAmount = $derived;
+            }
+        }
+    }
+
+    // Score is NOT completion. SCORM 2004 keeps success and completion
+    // separate, so never present a score as progress there. The legacy 1.2
+    // fallback is retained for packages that only ever report a score.
+    if ($completionAmount <= 0 && !scormIs2004Row($row)) {
+        $score = $row['score_raw'] ?? null;
+        if ($score !== null && $score !== '' && (float)$score > 0) {
+            $completionAmount = min(1.0, (float)$score / 100);
+        }
+    }
+
+    if ($completion === 'COMPLETED') {
+        $completionAmount = 1.0;
+    }
+
+    // Honest progress: track resume availability separately so the UI can say
+    // "Resume Learning" without inventing a percentage.
+    $resumeAvailable = ($completion !== 'COMPLETED'
+        && ((string)($row['suspend_data'] ?? '') !== '' || (string)($row['lesson_location'] ?? '') !== ''));
+    if ($resumeAvailable && $completion === 'NOT_ATTEMPTED') {
+        $completion = 'INCOMPLETE';
+    }
+
+    return [
+        'completionAmount' => round($completionAmount, 4),
+        'completion' => $completion,
+        'resumeAvailable' => $resumeAvailable,
+    ];
+}
+
+/**
+ * Whether a scorm_attempts row belongs to a SCORM 2004 package.
+ */
+function scormIs2004Row(array $row): bool
+{
+    $edition = strtolower((string)($row['scorm_edition'] ?? ''));
+    if (strpos($edition, '2004') !== false) {
+        return true;
+    }
+    return strtolower((string)($row['scorm_version'] ?? '')) === '2004';
+}
+
+/**
  * Native fetchScormRegistrations — reads scorm_attempts aggregated by
  * (user, package) so existing dashboards get one row per enrolled course.
  * Compatible format:
@@ -979,36 +1075,11 @@ function nativeFetchScormRegistrations(array $params = []): array
 
     $registrations = [];
     foreach ($rows as $row) {
-        $completionAmount = 0.0;
-        $completion = 'NOT_ATTEMPTED';
-
-        // Determine completion from status fields
-        $status = $row['lesson_status'] ?: ($row['completion_status'] ?: $row['success_status']);
-        if (in_array($status, ['completed', 'passed'], true) || $row['completion_status'] === 'completed') {
-            $completion = 'COMPLETED';
-            $completionAmount = 1.0;
-        } elseif (in_array($status, ['incomplete', 'browsed'], true)) {
-            $completion = 'INCOMPLETE';
-            // If progress measure available, use it
-            if ($row['progress_measure'] !== null) {
-                $completionAmount = (float)$row['progress_measure'];
-            }
-        }
-
-        // Score-based amount if we have a score and no completion yet
+        $regCompletion = scormRegistrationCompletion($row);
+        $completionAmount = $regCompletion['completionAmount'];
+        $completion = $regCompletion['completion'];
+        $resumeAvailable = $regCompletion['resumeAvailable'];
         $score = $row['score_raw'];
-        if ($completionAmount <= 0 && $score !== null && (float)$score > 0) {
-            $completionAmount = min(1.0, (float)$score / 100);
-        }
-
-        // Honest progress: without cmi.progress_measure there is NO defensible
-        // percentage. Track resume availability separately so the UI can say
-        // "Resume Learning" without inventing a fake "1%".
-        $resumeAvailable = ($completion !== 'COMPLETED'
-            && ((string)($row['suspend_data'] ?? '') !== '' || (string)($row['lesson_location'] ?? '') !== ''));
-        if ($resumeAvailable && $completion === 'NOT_ATTEMPTED') {
-            $completion = 'INCOMPLETE';
-        }
 
         $learnerName = trim(($row['user_first'] ?? '') . ' ' . ($row['user_last'] ?? ''));
         $regId = 'n_' . $row['package_id'] . '_u_' . $row['user_id'];
@@ -1101,31 +1172,11 @@ function nativeFetchScormRegistration(string $registrationId): array
     }
 
     // Build the registration directly from the fetched attempt row.
-    $completionAmount = 0.0;
-    $completion = 'NOT_ATTEMPTED';
-    $status = $row['lesson_status'] ?: ($row['completion_status'] ?: $row['success_status']);
-    if (in_array($status, ['completed', 'passed'], true) || $row['completion_status'] === 'completed') {
-        $completion = 'COMPLETED';
-        $completionAmount = 1.0;
-    } elseif (in_array($status, ['incomplete', 'browsed'], true)) {
-        $completion = 'INCOMPLETE';
-        if ($row['progress_measure'] !== null) {
-            $completionAmount = (float)$row['progress_measure'];
-        }
-    }
+    $regCompletion = scormRegistrationCompletion($row);
+    $completionAmount = $regCompletion['completionAmount'];
+    $completion = $regCompletion['completion'];
+    $resumeAvailable = $regCompletion['resumeAvailable'];
     $score = $row['score_raw'];
-    if ($completionAmount <= 0 && $score !== null && (float)$score > 0) {
-        $completionAmount = min(1.0, (float)$score / 100);
-    }
-
-    // Honest progress: without cmi.progress_measure there is NO defensible
-    // percentage. Track resume availability separately so the UI can say
-    // "Resume Learning" without inventing a fake "1%".
-    $resumeAvailable = ($completion !== 'COMPLETED'
-        && ((string)($row['suspend_data'] ?? '') !== '' || (string)($row['lesson_location'] ?? '') !== ''));
-    if ($resumeAvailable && $completion === 'NOT_ATTEMPTED') {
-        $completion = 'INCOMPLETE';
-    }
 
     return [
         'id' => $registrationId,

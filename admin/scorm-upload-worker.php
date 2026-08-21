@@ -1,6 +1,6 @@
 <?php
 /**
- * PURSUIT PATHWAYS LMS
+ * HURON-PERTH CHILDREN'S AID SOCIETY LMS
  * SCORM Upload Background Worker (CLI only)
  *
  * Invoked by scorm-upload-handler.php as a background process.

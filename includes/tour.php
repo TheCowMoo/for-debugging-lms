@@ -22,7 +22,7 @@
     position: relative;
     z-index: 100000 !important;
     pointer-events: auto !important;
-    box-shadow: 0 0 0 4px #82ACD6, 0 0 20px rgba(0, 128, 142, 0.4);
+    box-shadow: 0 0 0 4px #006F53, 0 0 20px rgba(0, 111, 83, 0.4);
     border-radius: 8px;
     transition: box-shadow 0.3s ease;
 }
@@ -49,17 +49,17 @@
     letter-spacing: 0.1em; margin-bottom: 6px;
 }
 .tour-tooltip .tour-icon { font-size: 1.6rem; margin-bottom: 8px; }
-.tour-tooltip h4 { margin: 0 0 6px; font-size: 1.1rem; color: #232D63; }
-.tour-tooltip p { margin: 0 0 18px; font-size: 0.9rem; color: #232D63; line-height: 1.5; }
+.tour-tooltip h4 { margin: 0 0 6px; font-size: 1.1rem; color: #1A2E2A; }
+.tour-tooltip p { margin: 0 0 18px; font-size: 0.9rem; color: #1A2E2A; line-height: 1.5; }
 
 .tour-tooltip .tt-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .tour-tooltip .tt-next {
-    flex: 1 1 auto; padding: 12px; background: #82ACD6; color: #fff;
+    flex: 1 1 auto; padding: 12px; background: #006F53; color: #fff;
     border: none; border-radius: 10px; font-weight: 700; font-size: 14px;
     cursor: pointer; transition: background 0.2s;
     min-height: 44px;
 }
-.tour-tooltip .tt-next:hover { background: #00808E; }
+.tour-tooltip .tt-next:hover { background: #60B49A; }
 .tour-tooltip .tt-prev, .tour-tooltip .tt-skip {
     padding: 12px 16px; background: transparent; color: #BBBDB7;
     border: 1px solid #d9e3df; border-radius: 10px; font-weight: 600; font-size: 13px;
@@ -71,7 +71,7 @@
 .tour-help-btn {
     position: fixed; bottom: 24px; right: 24px; z-index: 9998;
     width: 56px; height: 56px; border-radius: 50%;
-    background: #82ACD6; color: #fff; border: none;
+    background: #006F53; color: #fff; border: none;
     font-size: 22px; font-weight: 700; cursor: pointer;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     transition: transform 0.2s, background 0.2s;
@@ -79,7 +79,7 @@
     pointer-events: auto;
     bottom: calc(24px + env(safe-area-inset-bottom, 0px));
 }
-.tour-help-btn:hover { transform: scale(1.1); background: #00808E; }
+.tour-help-btn:hover { transform: scale(1.1); background: #60B49A; }
 
 @media (max-width: 640px) {
     .tour-tooltip { max-width: calc(100vw - 24px); left: 12px !important; right: 12px !important; top: auto !important; bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important; max-height: 55vh; }
