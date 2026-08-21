@@ -51,6 +51,8 @@ try {
                 $hash = password_hash($new_password, PASSWORD_DEFAULT);
                 $update = $pdo->prepare("UPDATE users SET password_hash = ?, reset_token = NULL, reset_expiry = NULL WHERE id = ?");
                 $update->execute([$hash, $user['id']]);
+                // Password changed — invalidate outstanding serve tokens.
+                bumpUserSecurityVersion((int)$user['id']);
 
                 logSecurityEvent('password_changed', 'info', ['reason' => 'reset'], (int)$user['id'], '');
                 redirectTo('login/?msg=updated');

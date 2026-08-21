@@ -45,7 +45,7 @@ use different `S3_PREFIX` values (`hpcas/` vs `scorm-content/`).
 | `course-viewer/`, `course-runner/` | Older course-delivery pages (largely superseded by `scorm-player/`). |
 | `scorm-player/index.php` | Modern full-screen SCORM player: iframe to `serve.php` with a short-lived HMAC serve token (`?pkg=N&t=TOKEN`) and a debug overlay. |
 | `scorm-content/serve.php` | The content server. Serves every package asset from S3/local disk, injects client-side URL intercepts, honours HTTP Range requests, rewrites HLS m3u8, rewrites & caches HTML. |
-| `scorm-content/debug.php` | Content-serving diagnostics. |
+| (removed) `scorm-content/debug.php` | Web diagnostic — removed from production; forbidden by `tests/check-production.php`. |
 | `scorm-api/scorm-rte.js` | Cross-version run-time (v3) injected into every content page: separate SCORM 1.2 (`window.API`) and SCORM 2004 (`window.API_1484_11`) adapters feeding ONE normalized state model; sends structured interactions/objectives/comments + a `request_id` on every commit/beacon. |
 | `scorm-api/store.php` | Cross-version tracking receiver (v3): transactional, exact-once (idempotency key), upserts interactions/objectives (never full-deletes), stores links + comments, edition-aware suspend limits, bounded audit events, returns full resume state. |
 | `scorm-api/scorm-normalize.php` | Pure normalization helpers (`scormDurationToSeconds`, `scormNormalizeStatuses`, `scormSuspendDataLimit`, `scormDetectEdition`, …) shared by store.php, serve.php, upload handlers, and the test suite. |
@@ -65,7 +65,7 @@ use different `S3_PREFIX` values (`hpcas/` vs `scorm-content/`).
 | `moodle-bridge.php` | Legacy Moodle web-services client; also hosts `fetchScormCourses()` / `nativeFetchScormCourses()` and the `shouldUseNativeBackend()` dispatch. |
 | `server-config/` | Sample nginx SCORM-router + security configs. |
 | `content/` | Branding images, plus protected `scorm/` (uploaded packages) and `cache/scorm/` (rewritten HTML cache). |
-| `_diag.php`, `api-test.php`, `s3-test.php`, `upload-diag.php`, `email-test.php`, `temp-db-users.php`, `login-debug.php` | Diagnostics / one-off files — mostly temporary; be careful about shipping them to production. |
+| (removed) `_diag.php`, `api-test.php`, `s3-test.php`, `upload-diag.php`, `email-test.php`, `temp-db-users.php`, `login-debug.php` | Web diagnostics / one-off test files — REMOVED from the production tree and forbidden by `tests/check-production.php`. |
 | `SCORM-COMPATIBILITY.md` | The cross-version compatibility contract: supported matrix, 1.2-vs-2004 status semantics, suspend limits, persistence guarantees, unsupported elements, analytics grain. Read before changing SCORM behaviour. |
 | `tests/` | No-framework test suite: `tests/run.php` runner, `tests/unit/scorm-unit-tests.php` (pure normalization tests), `tests/integration/rte-smoke.test.js` (RTE smoke test in a mocked browser), `tests/fixtures/registry.php` (vendor fixture matrix — data only). |
 ## 4. Environment configuration (`.env`)
@@ -260,14 +260,18 @@ All endpoints require `X-API-Key` / `Authorization: Bearer <API_KEY>` OR an admi
 5. **nginx router requirement.** `/scorm-content/*` only works through `serve.php` via the
    `location ^~ /scorm-content/` block. The iframe URL must carry `?pkg=N&t=TOKEN` so the router can
    pull `pkg`/`t` from the `Referer`. See `README.md` + `server-config/`.
-6. **Duplicate S3 define block in `_diag.php`** (~lines 80–81) — harmless but sloppy.
+6. ~~**Duplicate S3 define block in `_diag.php`**~~ — `_diag.php` has been removed from the tree.
 7. **Diagnostics shipped in the tree.** `_diag.php`, `api-test.php`, `s3-test.php`, `upload-diag.php`,
-   `email-test.php`, `temp-db-users.php`, `login-debug.php` exist in the repo; some are admin-gated,
-   but avoid leaving them in production.
+   `email-test.php`, `temp-db-users.php`, `login-debug.php`, and `scorm-content/debug.php` were
+   removed from production and are now forbidden by `tests/check-production.php` (run it before
+   packaging/deploying).
 8. **Upload size limits.** `SCORM_MAX_UPLOAD_SIZE` is 512 MB, but the real ceiling is PHP
    `post_max_size` / `upload_max_filesize` and nginx `client_max_body_size`.
-9. **Serve tokens expire after 4 hours.** Long open sessions will start failing mid-course; reloading
-   the player page issues a fresh token.
+9. **Serve tokens are short-lived (default 1h, `SCORM_TOKEN_TTL`) and revocable.** They embed a
+   user `security_version` that is bumped on password/role/org/email changes (immediate revocation).
+   `store.php` returns a `refresh_token` when the current token is near expiry and `serve.php`
+   refreshes entry pages, so long open sessions keep tracking. Reloading the player page also
+   issues a fresh token.
 10. **Replacing a package’s content.** A fresh upload always creates a NEW package id, but the
     Packages tab also has **Replace** — it POSTs `replace_package_id` to `scorm-upload-handler.php`,
     which creates a `replace_flag=1` job; the worker (`scorm-upload-run.php` / `scorm-upload-worker.php`)

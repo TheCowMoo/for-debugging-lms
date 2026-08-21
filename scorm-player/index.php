@@ -56,6 +56,21 @@ if (!$pkg) {
     exit('Course not found or access denied.');
 }
 
+// Resume: the launch URL may carry an attempt ID (selected by the native
+// launch path). Never trust it without verifying user + package ownership.
+$attemptId = (int)($_GET['attempt'] ?? 0);
+if ($attemptId > 0) {
+    try {
+        $attStmt = $pdo->prepare("SELECT id FROM scorm_attempts WHERE id = ? AND user_id = ? AND package_id = ?");
+        $attStmt->execute([$attemptId, (int)$_SESSION['user_id'], $packageId]);
+        if (!$attStmt->fetch()) {
+            $attemptId = 0;
+        }
+    } catch (PDOException $e) {
+        $attemptId = 0;
+    }
+}
+
 // ── Build tokenised content URL ──
 // A short-lived HMAC serve token (`t=`) is appended so that all asset sub-requests
 // (JS chunks, CSS, HTML pages) inside the iframe are authenticated without relying
@@ -66,6 +81,9 @@ $serveToken = generateServeToken((int)$_SESSION['user_id'], $packageId);
 $contentUrl = buildUrl('scorm-content/serve.php?pkg=' . $packageId . '&t=' . urlencode($serveToken));
 if ($scoId > 0) {
     $contentUrl .= '&sco=' . $scoId;
+}
+if ($attemptId > 0) {
+    $contentUrl .= '&attempt=' . $attemptId;
 }
 
 // Path-based route (only works with Apache .htaccess rewrite — kept as fallback)

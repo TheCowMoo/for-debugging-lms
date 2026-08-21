@@ -598,6 +598,10 @@ function ensureUserColumns(): void
         if (!in_array('invite_token_id', $columns, true)) {
             $pdo->exec('ALTER TABLE users ADD COLUMN invite_token_id INT NULL');
         }
+
+        if (!in_array('security_version', $columns, true)) {
+            $pdo->exec('ALTER TABLE users ADD COLUMN security_version INT NOT NULL DEFAULT 0 AFTER invite_token_id');
+        }
     } catch (PDOException $e) {
         error_log('[DB] ensureUserColumns failed: ' . $e->getMessage());
     }
@@ -736,20 +740,84 @@ function saveUserPreferences(array $prefs): bool
 // as `t=` to the iframe src URL. serve.php validates it BEFORE calling
 // requireLogin(), so asset requests are authenticated without cookies.
 //
-// Token format:  base64url(uid.pkgId.ts) . "." . base64url(hmac-sha256)
-// Validity:      4 hours (covers a full course session)
+// Token format:  base64url(uid.pkgId.issue.expiry.secVer.nonce) . "." . base64url(hmac-sha256)
+// Validity:      SCORM_TOKEN_TTL (default 1 hour); refreshed by store.php and serve.php
 // Secret:        APP_CSRF_SECRET (reuses the existing stable HMAC key)
 function generateServeToken(int $userId, int $packageId): string
 {
-    $ts      = time();
-    $payload = $userId . '.' . $packageId . '.' . $ts;
-    $sig     = hash_hmac('sha256', $payload, APP_CSRF_SECRET);
+    $ttl      = max(300, (int)(getenv('SCORM_TOKEN_TTL') ?: '3600'));
+    $issue    = time();
+    $expiry   = $issue + $ttl;
+    $secVer   = getUserSecurityVersion($userId);
+    $nonce    = csrfBase64Encode(random_bytes(8));
+    $payload  = $userId . '.' . $packageId . '.' . $issue . '.' . $expiry . '.' . $secVer . '.' . $nonce;
+    $sig      = hash_hmac('sha256', $payload, APP_CSRF_SECRET);
     return csrfBase64Encode($payload) . '.' . csrfBase64Encode($sig);
+}
+
+/**
+ * Current security version for a user. Bumped whenever the user's entitlements
+ * change (password reset, role/org change, disable), which invalidates every
+ * outstanding serve token.
+ */
+function getUserSecurityVersion(int $userId): int
+{
+    static $cache = [];
+    if (isset($cache[$userId])) {
+        return $cache[$userId];
+    }
+    try {
+        $pdo  = getDbConnection();
+        $stmt = $pdo->prepare("SELECT security_version FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $cache[$userId] = (int)$stmt->fetchColumn();
+    } catch (PDOException $e) {
+        $cache[$userId] = 0;
+    }
+    return $cache[$userId];
+}
+
+/**
+ * Invalidate all outstanding serve tokens for a user by bumping the security
+ * version. Call after password reset, role/org change, or account disable.
+ */
+function bumpUserSecurityVersion(int $userId): void
+{
+    try {
+        $pdo = getDbConnection();
+        $pdo->prepare("UPDATE users SET security_version = security_version + 1 WHERE id = ?")->execute([$userId]);
+    } catch (PDOException $e) {
+        error_log('[AUTH] bumpUserSecurityVersion failed: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Parse the expiry timestamp from a serve token payload without full
+ * validation. Returns null if the payload is malformed.
+ */
+function serveTokenExpiry(string $token): ?int
+{
+    $parts = explode('.', $token, 2);
+    if (count($parts) !== 2) {
+        return null;
+    }
+    $payload = csrfBase64Decode($parts[0]);
+    if ($payload === '') {
+        return null;
+    }
+    $pieces = explode('.', $payload, 6);
+    if (count($pieces) !== 6) {
+        return null;
+    }
+    return (int)$pieces[3];
 }
 
 /**
  * Validate a serve token and return the authenticated user ID on success,
  * or null on failure / expiry.
+ *
+ * Validates: constant-time signature, exact package binding, issue/expiry
+ * window, user existence, and the user's current security version (revocation).
  *
  * @param  string $token  The `t=` value from the query string
  * @param  int    $pkgId  The `pkg=` value from the query string (must match)
@@ -757,37 +825,36 @@ function generateServeToken(int $userId, int $packageId): string
  */
 function validateServeToken(string $token, int $pkgId): ?int
 {
+    static $cache = [];
+    if (array_key_exists($token, $cache)) {
+        return $cache[$token];
+    }
+    $result = null;
     $parts = explode('.', $token, 2);
-    if (count($parts) !== 2) {
-        return null;
+    if (count($parts) === 2) {
+        $payload = csrfBase64Decode($parts[0]);
+        $sig     = csrfBase64Decode($parts[1]);
+        $expected = hash_hmac('sha256', $payload, APP_CSRF_SECRET);
+        if ($payload !== '' && $sig !== '' && hash_equals($expected, $sig)) {
+            $pieces = explode('.', $payload, 6);
+            if (count($pieces) === 6) {
+                $uid      = (int)$pieces[0];
+                $tokenPkg = (int)$pieces[1];
+                $issue    = (int)$pieces[2];
+                $expiry   = (int)$pieces[3];
+                $secVer   = (int)$pieces[4];
+                if ($tokenPkg === $pkgId && $issue <= time() && time() <= $expiry && $uid > 0) {
+                    // Revocation check: the user's current security version must
+                    // match the one embedded in the token.
+                    if (getUserSecurityVersion($uid) === $secVer) {
+                        $result = $uid;
+                    }
+                }
+            }
+        }
     }
-    $payload = csrfBase64Decode($parts[0]);
-    $sig     = csrfBase64Decode($parts[1]);
-    if ($payload === '' || $sig === '') {
-        return null;
-    }
-    // Verify HMAC first (constant-time)
-    $expected = hash_hmac('sha256', $payload, APP_CSRF_SECRET);
-    if (!hash_equals($expected, $sig)) {
-        return null;
-    }
-    // Parse payload: uid.pkgId.ts
-    $pieces = explode('.', $payload, 3);
-    if (count($pieces) !== 3) {
-        return null;
-    }
-    $uid        = (int)$pieces[0];
-    $tokenPkg   = (int)$pieces[1];
-    $ts         = (int)$pieces[2];
-    // Package ID must match the request
-    if ($tokenPkg !== $pkgId) {
-        return null;
-    }
-    // Token must not be older than 4 hours (covers a full course session)
-    if (time() - $ts > 4 * 3600) {
-        return null;
-    }
-    return $uid > 0 ? $uid : null;
+    $cache[$token] = $result;
+    return $result;
 }
 
 // —— Multi-Organization (Multi-Tenant) Helpers ——
@@ -1194,6 +1261,7 @@ function ensureScormTables(): void
         user_id INT NOT NULL,
         attempt_id INT NULL,
         response JSON NULL,
+        payload_hash CHAR(64) NOT NULL DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_request_id (request_id),
         INDEX idx_attempt (attempt_id),

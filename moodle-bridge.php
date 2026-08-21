@@ -1311,6 +1311,7 @@ function nativeGetScormLaunchLink(string $registrationId, ?string $redirectOnExi
         return null;
     }
     $packageId = (int)$m[1];
+    $userId    = (int)$m[2];
 
     // Determine SCO
     try {
@@ -1328,9 +1329,41 @@ function nativeGetScormLaunchLink(string $registrationId, ?string $redirectOnExi
         return null;
     }
 
+    // Resume: prefer the learner's latest INCOMPLETE attempt that actually has
+    // tracking state (suspend_data / lesson_location / time). Empty placeholder
+    // rows created by nativeCreateScormRegistration() are intentionally skipped.
+    $resumeScoId     = $launchScoId;
+    $resumeAttemptId = 0;
+    try {
+        $resumeStmt = $pdo->prepare(
+            "SELECT id, sco_item_id FROM scorm_attempts
+             WHERE user_id = ? AND package_id = ? AND is_complete = 0
+               AND (
+                   (suspend_data IS NOT NULL AND suspend_data <> '')
+                   OR (lesson_location IS NOT NULL AND lesson_location <> '')
+                   OR total_time_seconds > 0
+               )
+             ORDER BY last_accessed_at DESC, id DESC LIMIT 1"
+        );
+        $resumeStmt->execute([$userId, $packageId]);
+        $resumeRow = $resumeStmt->fetch(PDO::FETCH_ASSOC);
+        if ($resumeRow) {
+            $resumeAttemptId = (int)$resumeRow['id'];
+            if ((int)$resumeRow['sco_item_id'] > 0) {
+                $resumeScoId = (int)$resumeRow['sco_item_id'];
+            }
+            error_log("[SCORM] Resume: pkg=$packageId user=$userId attempt=$resumeAttemptId sco=$resumeScoId");
+        }
+    } catch (PDOException $e) {
+        error_log('[SCORM] nativeGetScormLaunchLink resume lookup failed: ' . $e->getMessage());
+    }
+
     $url = buildUrl('scorm-player/?pkg=' . $packageId);
-    if ($launchScoId > 0) {
-        $url .= '&sco=' . $launchScoId;
+    if ($resumeScoId > 0) {
+        $url .= '&sco=' . $resumeScoId;
+    }
+    if ($resumeAttemptId > 0) {
+        $url .= '&attempt=' . $resumeAttemptId;
     }
     if ($redirectOnExitUrl) {
         $url .= '&redirect=' . urlencode($redirectOnExitUrl);

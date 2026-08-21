@@ -168,6 +168,17 @@ if (!isset($_SESSION['user_id'])) {
 }
 requireLogin();
 
+// Token refresh for long sessions: if the RTE's serve token is near expiry,
+// return a fresh token so tracking continues past the token lifetime.
+$serveToken = trim((string)($_GET['t'] ?? ''));
+$refreshToken = null;
+if ($serveToken !== '') {
+    $serveTokenExp = serveTokenExpiry($serveToken);
+    if ($serveTokenExp !== null && time() > $serveTokenExp - 900) {
+        $refreshToken = generateServeToken((int)$_SESSION['user_id'], $packageId);
+    }
+}
+
 $pdo = getDbConnection();
 $userId = (int)$_SESSION['user_id'];
 $orgId = getOrgId();
@@ -233,10 +244,15 @@ $userOrgId  = $userRow['organization_id'] ?? ($orgId ?? null);
 
 $attemptId = (int)($data['attempt'] ?? 0);
 if ($attemptId > 0) {
-    $check = $pdo->prepare("SELECT id FROM scorm_attempts WHERE id = ? AND user_id = ?");
-    $check->execute([$attemptId, $userId]);
-    if (!$check->fetch()) {
-        $attemptId = 0; // not this user's attempt — treat as new
+    $check = $pdo->prepare("SELECT id, sco_item_id FROM scorm_attempts WHERE id = ? AND user_id = ? AND package_id = ?");
+    $check->execute([$attemptId, $userId, $packageId]);
+    $attemptRow = $check->fetch(PDO::FETCH_ASSOC);
+    if (!$attemptRow) {
+        // Not this user's attempt (or wrong package) — treat as new.
+        $attemptId = 0;
+    } elseif ($scoId > 0 && (int)$attemptRow['sco_item_id'] > 0 && (int)$attemptRow['sco_item_id'] !== $scoId) {
+        // Attempt belongs to a different SCO — never mix state across SCOs.
+        $attemptId = 0;
     }
 }
 
@@ -251,11 +267,30 @@ if (isset($data['request_id'])) {
     $requestId = substr(preg_replace('/[^A-Za-z0-9_.-]/', '', $requestId), 0, 64);
 }
 if ($requestId !== '') {
-    $claim = $pdo->prepare("INSERT IGNORE INTO scorm_request_idempotency (request_id, user_id) VALUES (?, ?)");
-    $claim->execute([$requestId, $userId]);
+    // Payload fingerprint: a replayed request_id must carry the SAME body.
+    // (The payload_hash column may be absent until migration 0003 runs.)
+    static $hasPayloadHash = null;
+    if ($hasPayloadHash === null) {
+        $hasPayloadHash = false;
+        try {
+            $hashCol = $pdo->query("SHOW COLUMNS FROM scorm_request_idempotency LIKE 'payload_hash'")->fetchColumn();
+            $hasPayloadHash = (bool)$hashCol;
+        } catch (Throwable $e) {
+            $hasPayloadHash = false;
+        }
+    }
+    $payloadHash = $hasPayloadHash ? hash('sha256', $rawBody) : '';
+
+    if ($hasPayloadHash) {
+        $claim = $pdo->prepare("INSERT IGNORE INTO scorm_request_idempotency (request_id, user_id, payload_hash) VALUES (?, ?, ?)");
+        $claim->execute([$requestId, $userId, $payloadHash]);
+    } else {
+        $claim = $pdo->prepare("INSERT IGNORE INTO scorm_request_idempotency (request_id, user_id) VALUES (?, ?)");
+        $claim->execute([$requestId, $userId]);
+    }
     if ($claim->rowCount() === 0) {
         $dup = $pdo->prepare(
-            "SELECT attempt_id, response FROM scorm_request_idempotency WHERE request_id = ? AND user_id = ?"
+            "SELECT attempt_id, response, payload_hash FROM scorm_request_idempotency WHERE request_id = ? AND user_id = ?"
         );
         $dup->execute([$requestId, $userId]);
         $dupRow = $dup->fetch(PDO::FETCH_ASSOC);
@@ -263,6 +298,11 @@ if ($requestId !== '') {
             'replayed' => $dupRow && $dupRow['response'] !== null ? true : false,
             'committed' => $dupRow && (int)$dupRow['attempt_id'] > 0 ? true : false,
         ]);
+        // Replaying the SAME request_id with a DIFFERENT body is an abuse /
+        // tamper signal — never honor it.
+        if ($dupRow && $hasPayloadHash && $dupRow['payload_hash'] !== '' && $dupRow['payload_hash'] !== $payloadHash) {
+            scormStoreFail(409, 'Payload does not match request_id.', false);
+        }
         if ($dupRow && $dupRow['response'] !== null) {
             header('Content-Type: application/json');
             echo $dupRow['response'];
@@ -324,6 +364,15 @@ $norm = scormNormalizeStatuses(
     $terminating
 );
 
+// Completion is STATUS-driven only. A terminating request (browser close,
+// unload beacon, LMSFinish) is a transport event, NOT course completion.
+$isComplete = 0;
+if ($version === '2004') {
+    $isComplete = (in_array($rawCompletion, ['completed'], true) || in_array($rawSuccess, ['passed', 'failed'], true)) ? 1 : 0;
+} else {
+    $isComplete = (in_array($rawLessonStatus, ['completed', 'passed', 'failed'], true)) ? 1 : 0;
+}
+
 $now = date('Y-m-d H:i:s');
 $committed = false;
 
@@ -383,7 +432,7 @@ try {
                      completion_threshold, scaled_passing_score,
                      normalized_completion, normalized_success, status_source, attempt_state,
                      last_request_id, browser_info, is_complete, started_at, last_accessed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)");
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
                 $insert->execute([
                     $userId,
                     $userOrgId,
@@ -418,6 +467,7 @@ try {
                     $norm['state'],
                     $requestId,
                     $browserInfo,
+                    $isComplete,
                     $now,
                     $now,
                 ]);
@@ -482,7 +532,8 @@ try {
             last_accessed_at = ?
             WHERE id = ? AND user_id = ?");
 
-        $isComplete = ($terminating && $norm['state'] !== 'in_progress') || in_array($norm['state'], ['completed', 'passed', 'failed', 'browsed'], true) ? 1 : 0;
+        // is_complete is computed above (status-driven only); a terminating
+        // unload/close is NOT completion.
         $update->execute([
             $rawLessonStatus !== '' ? $rawLessonStatus : 'not attempted',
             $rawCompletion,
@@ -806,6 +857,8 @@ try {
         'attempt_id' => $attemptId,
         'initial'    => $resume,
         'edition'    => $edition,
+        // Fresh serve token when the RTE's token was near expiry (long courses).
+        'refresh_token' => $refreshToken,
         'saved'      => [
             'status'           => $rawLessonStatus ?: ($rawCompletion ?: $rawSuccess),
             'normalized_state' => $norm['state'],

@@ -50,7 +50,12 @@ try {
         'scorm_version'   => $row['scorm_version'] ?? '',
     ]);
 } catch (Throwable $e) {
-    error_log('[STATUS] Error: ' . $e->getMessage());
+    $correlationId = bin2hex(random_bytes(8));
+    error_log('[STATUS][' . $correlationId . '] ' . $e->getMessage());
     // Never echo raw exception text to the browser.
-    echo json_encode(['ok' => false, 'error' => 'Server error. Please try again later.']);
+    echo json_encode([
+        'ok'             => false,
+        'error'          => 'server_error',
+        'correlation_id' => $correlationId,
+    ]);
 }

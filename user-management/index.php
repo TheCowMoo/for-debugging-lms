@@ -125,6 +125,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare("UPDATE users SET organization_id = ? WHERE id = ?")->execute([$orgId, $userId]);
             }
 
+            // Role/org entitlements changed — invalidate outstanding serve tokens.
+            bumpUserSecurityVersion($userId);
+
             // ── Audit: admin user update / role change ──
             if ($before) {
                 $targetEmail = (string)($before['email'] ?? '');

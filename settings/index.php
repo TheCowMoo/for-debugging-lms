@@ -73,6 +73,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     $upd = $pdo->prepare("UPDATE users SET first_name = ?, last_name = ?, email = ? WHERE id = ?");
                     $upd->execute([$firstName, $lastName, $email, $userId]);
+                    // Email is a security-relevant identifier — invalidate tokens on change.
+                    if ($email !== ($user['email'] ?? '')) {
+                        bumpUserSecurityVersion((int)$userId);
+                    }
                     $_SESSION['email'] = $email; // keep session in sync
                     $user['first_name'] = $firstName;
                     $user['last_name']  = $lastName;
@@ -111,6 +115,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $hash = password_hash($new, PASSWORD_DEFAULT);
                     $upd  = $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
                     $upd->execute([$hash, $userId]);
+                    // Password changed — invalidate outstanding serve tokens.
+                    bumpUserSecurityVersion((int)$userId);
                     logSecurityEvent('password_changed', 'info', ['reason' => 'self_service'], (int)$userId, $user['email'] ?? '');
                     $message = "Password updated successfully.";
                     $message_type = 'success';

@@ -82,7 +82,7 @@
         terminated: false,
         dirty: false,
         lastError: '0',
-        attemptId: null,
+        attemptId: cfg.attempt ? parseInt(cfg.attempt, 10) : null,
         entry: 'ab-initio',
         scalars: {},          // lowercase element -> raw value (1.2 AND 2004 spellings)
         sessionOnly: {},      // accepted for the session only, never persisted
@@ -600,6 +600,13 @@
 
     function handlePersistResponse(data) {
         if (!data || typeof data !== 'object') return;
+        // Long-course token refresh: the server returns a fresh serve token when
+        // the current one is near expiry. Update it for subsequent commits.
+        if (data.refresh_token && typeof data.refresh_token === 'string') {
+            cfg.token = data.refresh_token;
+            API_ENDPOINT = cfg.apiEndpoint || '/scorm-api/store.php';
+            API_ENDPOINT += (API_ENDPOINT.indexOf('?') >= 0 ? '&' : '?') + 't=' + encodeURIComponent(cfg.token);
+        }
         if (data.ok) {
             if (data.attempt_id) state.attemptId = data.attempt_id;
             if (data.saved && typeof data.saved.total_seconds === 'number') state.totalSeconds = data.saved.total_seconds;

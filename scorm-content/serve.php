@@ -97,13 +97,28 @@ if (!isset($_SESSION['user_id'])) {
     redirectTo('login/');
 }
 
+// ── Serve-token refresh ──
+// The serve token is short-lived (default 1h). On HTML entry pages, if the
+// incoming token is near expiry, issue a fresh one so every asset URL, the
+// RTE config, and the routing cookie in this page stay valid for the session.
+$_serveTokenEffective = $_serveToken;
+if ($_serveToken !== '' && !$_isAssetRequest) {
+    $serveEntryExpiry = serveTokenExpiry($_serveToken);
+    if ($serveEntryExpiry !== null && time() > $serveEntryExpiry - 900 && isset($_SESSION['user_id'])) {
+        $_serveTokenEffective = generateServeToken((int)$_SESSION['user_id'], $_pkgIdForToken);
+    }
+}
+// Downstream rewrite/base/config code reads $_GET['t']; point it at the
+// effective (possibly refreshed) token.
+$_GET['t'] = $_serveTokenEffective;
+
 // ── Short-lived context cookie for nginx asset routing ──
 // Rise/Storyline compute some asset URLs at runtime (no t= query and, with some
 // privacy tools, no Referer). The nginx /scorm-content/ router falls back to
 // this HttpOnly cookie to recover pkg + token. Same value as the t= token but
 // HttpOnly, so page JavaScript cannot read it.
-if ($_serveToken !== '' && $_pkgIdForToken > 0 && !$_isAssetRequest) {
-    setcookie('scorm_ctx', $_pkgIdForToken . ':' . $_serveToken, [
+if ($_serveTokenEffective !== '' && $_pkgIdForToken > 0 && !$_isAssetRequest) {
+    setcookie('scorm_ctx', $_pkgIdForToken . ':' . $_serveTokenEffective, [
         'expires'  => time() + 3600,
         'path'     => '/scorm-content/',
         'httponly' => true,
@@ -718,6 +733,9 @@ if (!empty($sessUserId) && !isTestUser()) {
 $inject = "<script>window.SCORM_PACKAGE_CONFIG = " . json_encode([
     'pkg' => $packageId,
     'sco' => (int)($_GET['sco'] ?? 0),
+    // Optional resume attempt ID threaded through the launch URL. The RTE seeds
+    // its attemptId from this so the first Initialize resumes the stored state.
+    'attempt' => (int)($_GET['attempt'] ?? 0),
     'version' => $pkg['scorm_version'] ?? '1.2',
     // scorm_edition ('1.2', '2004 2nd Edition', ...) — drives suspend-data
     // limits and edition-specific field behaviour in scorm-rte.js.
