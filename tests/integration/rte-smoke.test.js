@@ -16,7 +16,7 @@ const windowObj = {
     SCORM_PACKAGE_CONFIG: {
         pkg: 42, sco: 7, version: '1.2', edition: '1.2',
         apiEndpoint: 'http://lms.test/scorm-api/store.php', token: 'tok123',
-        exitUrl: 'http://lms.test/course-page/'
+        exitUrl: 'http://lms.test/course-page/', debugRte: true
     },
     SCORM_USER: { id: 'u1', name: 'Alice' },
     addEventListener: function (evt, fn) { (this._listeners = this._listeners || {})[evt] = (this._listeners[evt] || []).concat([fn]); },
@@ -35,9 +35,13 @@ global.XMLHttpRequest = class {
     constructor() { this.status = 0; this.responseText = ''; }
     open() {}
     setRequestHeader() {}
-    send() {
+    send(body) {
         this.status = 200;
         this.responseText = JSON.stringify({ ok: true, attempt_id: 101, initial: { values: [{ element: 'cmi.core.lesson_location', value: 'slide5' }] } });
+        try {
+            captured.push(JSON.parse(body));
+            persistCount++;
+        } catch (e) {}
     }
 };
 
@@ -117,20 +121,19 @@ async function run() {
     assert(api.LMSFinish() === 'true', 'LMSFinish returns true');
     assert(api.LMSFinish() === 'true', 'second LMSFinish still returns true');
     await delay(40);
-    assert(persistCount >= before + 1, 'terminate persisted');
+    assert(persistCount >= before + 1, 'terminate persisted (synchronous XHR)');
     const t = captured.filter((c) => c.terminating === true);
-    assert(t.length >= 1, 'terminating payload sent');
+    assert(t.length === 1, 'exactly one terminating payload (Terminate finalizes session)');
     assert(t.length > 0 && t[t.length - 1].session_delta_ms <= 1000, 'terminate delta <=1s (no double-counted time)');
 
-    console.log('7. Unload beacon');
+    console.log('7. Unload after Terminate (no double-persist)');
     sentBeacons = [];
     const unload = (windowObj._listeners.beforeunload || [])[0];
     try { unload(); } catch (e) { console.log('  [debug] unload threw: ' + e.message); }
-    assert(sentBeacons.length >= 1, 'beacon sent on unload');
-    const beacon = sentBeacons[0];
-    assert(beacon.terminating === true, 'beacon is terminating');
-    assert(beacon.request_id && beacon.request_id.length > 0, 'beacon has request_id');
-    assert(beacon.session_delta_ms <= 1000, 'beacon delta ~0 after Terminate (no double count)');
+    assert(sentBeacons.length === 0, 'no beacon fired (Terminate already finalized session)');
+    assert(captured.filter((c) => c.terminating === true).length === 1, 'unload did not double-persist');
+    const tp = captured.filter((c) => c.terminating === true)[0];
+    assert(tp && tp.request_id && tp.request_id.length > 0, 'terminate payload has request_id');
 
     console.log('8. Cross-version alias probing (2004 API on 1.2 package)');
     // The session was already initialized via the 1.2 API: a second

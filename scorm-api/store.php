@@ -376,6 +376,18 @@ if ($version === '2004') {
 $now = date('Y-m-d H:i:s');
 $committed = false;
 
+// Progress source bookkeeping (reported vs derived — P3). The reported value is
+// the official cmi.progress_measure (0..1) when the package sends one.
+$reportedProgress = ($progress !== null && $progress !== '') ? (float)$progress : null;
+if ($reportedProgress !== null) {
+    $progressSource = 'scorm_reported';
+} elseif ($isComplete === 1) {
+    $progressSource = 'completed_status';
+} else {
+    $progressSource = 'none';
+}
+$progressCalcAt = $now;
+
 // ── Step 5: begin transaction ──
 try {
     $pdo->beginTransaction();
@@ -384,6 +396,9 @@ try {
     $isNewAttempt = ($attemptId === 0);
     $responseTotalSeconds = $sessionSeconds;
     $priorState = null;
+    // Snapshot of the STORED attempt state (before this commit's values are
+    // applied) so the first Initialize (empty values) returns real resume data.
+    $resumeState = null;
 
     if ($isNewAttempt) {
         // Load total time carried from previous attempts (same package/SCO).
@@ -428,11 +443,11 @@ try {
                      lesson_status, completion_status, success_status,
                      score_raw, score_scaled, score_min, score_max,
                      mastery_score, passed, session_time_seconds, total_time_seconds,
-                     lesson_location, suspend_data, progress_measure, entry, mode, credit, `exit`,
+                     lesson_location, suspend_data, progress_measure, reported_progress_measure, progress_source, progress_calculated_at, entry, mode, credit, `exit`,
                      completion_threshold, scaled_passing_score,
                      normalized_completion, normalized_success, status_source, attempt_state,
                      last_request_id, browser_info, is_complete, started_at, last_accessed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
                 $insert->execute([
                     $userId,
                     $userOrgId,
@@ -455,6 +470,9 @@ try {
                     $location,
                     $suspend,
                     $progress !== null && $progress !== '' ? (float)$progress : null,
+                    $reportedProgress,
+                    $progressSource,
+                    $progressCalcAt,
                     $entry,
                     $mode,
                     $credit,
@@ -499,6 +517,9 @@ try {
             $prevTotal = (int)$row['total_time_seconds'];
             $priorState = $row;
         }
+        // Snapshot resume state BEFORE this request's (possibly empty) values
+        // overwrite the stored suspend_data/lesson_location on first Initialize.
+        $resumeState = scormStoreBuildResume($pdo, $attemptId, $version, $edition);
         // Accumulate incremental delta (no double-counting — RTE sends deltas).
         $responseTotalSeconds = $prevTotal + $sessionSeconds;
 
@@ -516,6 +537,9 @@ try {
             lesson_location = ?,
             suspend_data = ?,
             progress_measure = ?,
+            reported_progress_measure = ?,
+            progress_source = ?,
+            progress_calculated_at = ?,
             entry = ?,
             mode = ?,
             credit = ?,
@@ -548,6 +572,9 @@ try {
             $location,
             $suspend,
             $progress !== null && $progress !== '' ? (float)$progress : null,
+            $reportedProgress,
+            $progressSource,
+            $progressCalcAt,
             $entry,
             $mode,
             $credit,
@@ -850,7 +877,11 @@ try {
     $committed = true;
 
     // ── Step 12: complete resume state + attempt id ──
-    $resume = scormStoreBuildResume($pdo, $attemptId, $version, $edition);
+    // For an existing attempt, prefer the pre-update snapshot (real stored
+    // state); for a new attempt, build from what was just inserted (empty).
+    $resume = $resumeState !== null
+        ? $resumeState
+        : scormStoreBuildResume($pdo, $attemptId, $version, $edition);
 
     $response = [
         'ok'         => true,
@@ -859,6 +890,19 @@ try {
         'edition'    => $edition,
         // Fresh serve token when the RTE's token was near expiry (long courses).
         'refresh_token' => $refreshToken,
+        // Reported vs derived progress (P3). estimated/confidence/parser stay
+        // null until a validated package adapter exists (spec Phase 3).
+        'progress'   => [
+            'reported'        => $reportedProgress,
+            'estimated'       => null,
+            'display_percent' => $reportedProgress !== null ? (int)round($reportedProgress * 100) : null,
+            'source'          => $progressSource,
+            'confidence'      => null,
+            'parser_version'  => '',
+            'position'        => $location !== '' ? $location : null,
+        ],
+        'completion_status' => $rawCompletion,
+        'success_status'    => $rawSuccess,
         'saved'      => [
             'status'           => $rawLessonStatus ?: ($rawCompletion ?: $rawSuccess),
             'normalized_state' => $norm['state'],

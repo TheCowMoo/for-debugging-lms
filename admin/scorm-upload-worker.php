@@ -449,28 +449,60 @@ try {
         $packageVersion = $svNode ? trim($svNode->textContent) : '';
 
         $hashParts = [];
+        $fileList = [];
         $riiH = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($packageDir, FilesystemIterator::SKIP_DOTS));
         foreach ($riiH as $hf) {
             if (!$hf->isFile()) continue;
-            $hashParts[] = str_replace(DIRECTORY_SEPARATOR, '/', substr($hf->getPathname(), strlen($packageDir) + 1)) . ':' . $hf->getSize();
+            $rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($hf->getPathname(), strlen($packageDir) + 1));
+            $fileList[] = $rel;
+            $hashParts[] = $rel . ':' . $hf->getSize();
         }
         sort($hashParts, SORT_STRING);
         $contentHash = hash('sha256', implode("\n", $hashParts));
 
+        // ── Adapter fingerprint (authoring-tool detection) ──
+        // Only families with a validated parser (progress-adapter phase) may
+        // have their opaque suspend_data decoded; unknown packages stay
+        // 'generic' and are never parsed opaquely.
+        $adapter = scormDetectAdapter($fileList);
+        $adapterFamily  = $adapter['family'];
+        $adapterVersion = $adapter['version'];
+        $parserVersion  = $adapter['parser'];
+        $manifestHash   = hash('sha256', $manifestXml);
+        $runtimeHash    = '';
+        foreach (($adapter['runtime_files'] ?? []) as $rf) {
+            foreach ($fileList as $fl) {
+                if (strtolower($fl) === strtolower($rf) || strpos(strtolower($fl), strtolower($rf)) !== false) {
+                    $rfPath = $packageDir . '/' . $fl;
+                    if (is_file($rfPath)) {
+                        $runtimeHash = hash_file('sha256', $rfPath);
+                        break 2;
+                    }
+                }
+            }
+        }
+        error_log("[WORKER] Adapter detected for pkg=$pkgId: $adapterFamily (version='$adapterVersion' parser='$parserVersion')");
+
         $fingerprint = json_encode([
-            'standard'     => $schemaVersion,
-            'edition'      => $edition,
-            'launch_href'  => $firstLaunchHref,
-            'manifest_id'  => $manifestId,
-            'sco_count'    => $scoCount,
-            'content_hash' => $contentHash,
-            'asset_count'  => $extractedCount,
+            'standard'        => $schemaVersion,
+            'edition'         => $edition,
+            'launch_href'     => $firstLaunchHref,
+            'manifest_id'     => $manifestId,
+            'sco_count'       => $scoCount,
+            'content_hash'    => $contentHash,
+            'asset_count'     => $extractedCount,
+            'adapter_family'  => $adapterFamily,
+            'adapter_version' => $adapterVersion,
+            'runtime_hash'    => $runtimeHash,
+            'manifest_hash'   => $manifestHash,
+            'parser_version'  => $parserVersion,
         ]);
 
         $pdo->prepare("UPDATE scorm_packages SET
                 launch_sco_id = ?, upload_path = ?,
                 scorm_edition = ?, manifest_id = ?, package_version = ?, sco_count = ?,
-                activity_tree = ?, resource_metadata = ?, content_hash = ?, fingerprint = ?
+                activity_tree = ?, resource_metadata = ?, content_hash = ?, fingerprint = ?,
+                adapter_family = ?, adapter_version = ?, runtime_hash = ?, manifest_hash = ?, parser_version = ?
                 WHERE id = ?")
             ->execute([
                 $firstLaunchScoId,
@@ -483,6 +515,11 @@ try {
                 json_encode($resourceMetadata),
                 $contentHash,
                 $fingerprint,
+                $adapterFamily,
+                $adapterVersion,
+                $runtimeHash,
+                $manifestHash,
+                $parserVersion,
                 $pkgId,
             ]);
     } else {

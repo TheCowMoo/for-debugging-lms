@@ -319,3 +319,41 @@ if (!function_exists('scormDetectEdition')) {
         return '';
     }
 }
+
+if (!function_exists('scormDetectAdapter')) {
+    /**
+     * Detect the authoring-tool adapter family from an extracted package's file
+     * listing. Returns ['family', 'version', 'parser', 'runtime_files'].
+     *
+     * Families: storyline | rise | captivate | ispring | generic.
+     * Only families with a validated parser (progress-adapter phase) may have
+     * their opaque suspend_data decoded; unknown packages are 'generic' and are
+     * never parsed opaquely.
+     */
+    function scormDetectAdapter(array $files): array
+    {
+        $flat = array_map('strtolower', $files);
+        $has = function (string $needle) use ($flat): bool {
+            foreach ($flat as $f) {
+                if (strpos($f, $needle) !== false) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        if ($has('story_content/story.js') || $has('story_content/story_html5.html')) {
+            return ['family' => 'storyline', 'version' => 'html5', 'parser' => 'storyline-html5-v1', 'runtime_files' => ['story_content/story.js', 'story_content/story_html5.html']];
+        }
+        if ($has('scormcontent/index.html')) {
+            return ['family' => 'rise', 'version' => '1', 'parser' => 'rise-scormcontent-v1', 'runtime_files' => ['scormcontent/index.html']];
+        }
+        if ($has('captivate.js')) {
+            return ['family' => 'captivate', 'version' => '', 'parser' => 'captivate-v1', 'runtime_files' => ['captivate.js']];
+        }
+        if ($has('isplayer.js')) {
+            return ['family' => 'ispring', 'version' => '', 'parser' => 'ispring-v1', 'runtime_files' => ['isplayer.js']];
+        }
+        return ['family' => 'generic', 'version' => '', 'parser' => '', 'runtime_files' => []];
+    }
+}

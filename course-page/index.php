@@ -19,11 +19,17 @@ if (!empty($userEmail)) {
 
     if (!empty($courses)) {
         foreach ($courses as $reg) {
+            $progressPct = round(($reg['registrationCompletionAmount'] ?? 0) * 100);
+            $resumeAvail = !empty($reg['resumeAvailable']);
             $userCourses[] = [
-                'title'      => $reg['course']['title'] ?? 'Untitled Course',
-                'regId'      => $reg['id'],
-                'courseId'   => $reg['course']['id'] ?? '',
-                'progress'   => round(($reg['registrationCompletionAmount'] ?? 0) * 100),
+                'title'           => $reg['course']['title'] ?? 'Untitled Course',
+                'regId'           => $reg['id'],
+                'courseId'        => $reg['course']['id'] ?? '',
+                'progress'        => $progressPct,
+                'resumeAvailable' => $resumeAvail,
+                'progressLabel'   => $progressPct > 0
+                    ? $progressPct . '%'
+                    : ($resumeAvail ? 'In Progress' : '0%'),
             ];
         }
     }
@@ -203,7 +209,7 @@ if ($launchMode && empty($courseUrl)) {
                                 <div class="progress-container">
                                     <div class="progress-label">
                                         <span>Progress</span>
-                                        <span><?php echo $course['progress']; ?>%</span>
+                                        <span><?php echo htmlspecialchars($course['progressLabel'] ?? '0%'); ?></span>
                                     </div>
                                     <div class="progress-bar-bg">
                                         <div class="progress-bar-fill" style="width: <?php echo $course['progress']; ?>%;"></div>
@@ -219,7 +225,7 @@ if ($launchMode && empty($courseUrl)) {
                                     <input type="hidden" name="auto_launch" value="1">
                                     <input type="hidden" name="registration_id" value="<?php echo htmlspecialchars($course['regId']); ?>">
                                     <button type="submit" class="btn-action">
-                                        <?php echo ($course['progress'] > 0) ? 'Resume Learning' : 'Start Course'; ?>
+                                        <?php echo ($course['resumeAvailable'] ?? false) ? 'Resume Learning' : 'Start Course'; ?>
                                     </button>
                                 </form>
                             </div>

@@ -1001,16 +1001,13 @@ function nativeFetchScormRegistrations(array $params = []): array
             $completionAmount = min(1.0, (float)$score / 100);
         }
 
-        // SCORM 1.2 workaround: 1.2 has no progress_measure. If the learner has
-        // bookmark/resume data but hasn't completed, surface a non-zero 'in
-        // progress' amount so the UI shows Resume Learning + progress instead
-        // of a bare 0%. (SCORM 2004 re-uploads keep real progress_measure.)
-        if ($row['progress_measure'] === null && $completion !== 'COMPLETED'
-            && ((string)($row['suspend_data'] ?? '') !== '' || (string)($row['lesson_location'] ?? '') !== '')) {
-            $completionAmount = 0.01;
-            if ($completion === 'NOT_ATTEMPTED') {
-                $completion = 'INCOMPLETE';
-            }
+        // Honest progress: without cmi.progress_measure there is NO defensible
+        // percentage. Track resume availability separately so the UI can say
+        // "Resume Learning" without inventing a fake "1%".
+        $resumeAvailable = ($completion !== 'COMPLETED'
+            && ((string)($row['suspend_data'] ?? '') !== '' || (string)($row['lesson_location'] ?? '') !== ''));
+        if ($resumeAvailable && $completion === 'NOT_ATTEMPTED') {
+            $completion = 'INCOMPLETE';
         }
 
         $learnerName = trim(($row['user_first'] ?? '') . ' ' . ($row['user_last'] ?? ''));
@@ -1036,6 +1033,7 @@ function nativeFetchScormRegistrations(array $params = []): array
             'lastAccessDate' => $row['last_accessed_at'] ?? '',
             'updated' => $row['last_accessed_at'] ?? '',
             'isComplete' => (int)$row['is_complete'],
+            'resumeAvailable' => $resumeAvailable,
             'native' => true,
             'package_id' => (int)$row['package_id'],
             'sco_item_id' => $row['sco_item_id'] ? (int)$row['sco_item_id'] : null,
@@ -1120,16 +1118,13 @@ function nativeFetchScormRegistration(string $registrationId): array
         $completionAmount = min(1.0, (float)$score / 100);
     }
 
-    // SCORM 1.2 workaround: 1.2 has no progress_measure. If the learner has
-    // bookmark/resume data but hasn't completed, surface a non-zero 'in
-    // progress' amount so the UI shows Resume Learning + progress instead
-    // of a bare 0%. (SCORM 2004 re-uploads keep real progress_measure.)
-    if ($row['progress_measure'] === null && $completion !== 'COMPLETED'
-        && ((string)($row['suspend_data'] ?? '') !== '' || (string)($row['lesson_location'] ?? '') !== '')) {
-        $completionAmount = 0.01;
-        if ($completion === 'NOT_ATTEMPTED') {
-            $completion = 'INCOMPLETE';
-        }
+    // Honest progress: without cmi.progress_measure there is NO defensible
+    // percentage. Track resume availability separately so the UI can say
+    // "Resume Learning" without inventing a fake "1%".
+    $resumeAvailable = ($completion !== 'COMPLETED'
+        && ((string)($row['suspend_data'] ?? '') !== '' || (string)($row['lesson_location'] ?? '') !== ''));
+    if ($resumeAvailable && $completion === 'NOT_ATTEMPTED') {
+        $completion = 'INCOMPLETE';
     }
 
     return [
@@ -1152,6 +1147,7 @@ function nativeFetchScormRegistration(string $registrationId): array
         'lastAccessDate' => $row['last_accessed_at'] ?? '',
         'updated' => $row['last_accessed_at'] ?? '',
         'isComplete' => (int)$row['is_complete'],
+        'resumeAvailable' => $resumeAvailable,
         'native' => true,
         'package_id' => (int)$packageId,
     ];

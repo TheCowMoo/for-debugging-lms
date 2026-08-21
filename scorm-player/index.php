@@ -402,7 +402,7 @@ if ($showDiag) {
         <div class="course-title"><?php echo htmlspecialchars($pkg['title']); ?></div>
         <div class="learner-name"><?php echo htmlspecialchars($currentUser['first_name'] ?? 'Learner'); ?></div>
         <div class="actions">
-            <a href="<?php echo $coursePageUrl; ?>" class="btn btn-exit">Exit Course</a>
+            <a href="<?php echo $coursePageUrl; ?>" target="_top" class="btn btn-exit" onclick="exitCourse(event)">Exit Course</a>
         </div>
     </div>
 
@@ -432,7 +432,7 @@ if ($showDiag) {
 
             <div class="actions">
                 <button class="btn btn-retry" onclick="retryLoad()">Try Again</button>
-                <a href="<?php echo $coursePageUrl; ?>" class="btn btn-exit">Back to Courses</a>
+                <a href="<?php echo $coursePageUrl; ?>" target="_top" class="btn btn-exit">Back to Courses</a>
                 <button class="btn btn-details" onclick="toggleDetails()">Show Technical Details</button>
             </div>
 
@@ -476,6 +476,24 @@ if ($showDiag) {
         var consoleErrors  = [];
         var resourceErrors = [];
         var loaderHideTimer = null;
+
+        // ── Exit Course: persist via the RTE before navigating ──
+        // The RTE's Terminate()/LMSFinish now sync-persists (scorm-rte.js) and
+        // then navigates the top itself. We only fall back to a direct
+        // navigation if the runtime isn't reachable.
+        window.exitCourse = function (e) {
+            if (e && e.preventDefault) e.preventDefault();
+            try {
+                var api = frame && frame.contentWindow
+                    && (frame.contentWindow.API_1484_11 || frame.contentWindow.API);
+                if (api && api.Terminate) { api.Terminate(); }
+                else if (api && api.LMSFinish) { api.LMSFinish(); }
+            } catch (err) {}
+            // Always navigate. The RTE's Terminate() sync-persists BEFORE
+            // returning, and its redirectToExit() may navigate too — this
+            // guarantees the exit regardless.
+            window.top.location.href = '<?php echo $coursePageUrl; ?>';
+        };
 
         // ── Intercept console errors ──
         var origError = console.error.bind(console);

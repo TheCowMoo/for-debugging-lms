@@ -80,6 +80,7 @@
     var state = {
         initialized: false,
         terminated: false,
+        finalized: false,
         dirty: false,
         lastError: '0',
         attemptId: cfg.attempt ? parseInt(cfg.attempt, 10) : null,
@@ -710,6 +711,7 @@
             if (state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
             state.initialized = true;
             state.terminated = false;
+            state.finalized = false;
             setError(ERR.NO_ERROR);
             try { loadInitialStateSync(); } catch (e) {}
             return 'true';
@@ -758,6 +760,7 @@
             if (state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
             state.initialized = true;
             state.terminated = false;
+            state.finalized = false;
             setError(ERR.NO_ERROR);
             try { loadInitialStateSync(); } catch (e) {}
             return 'true';
@@ -795,53 +798,64 @@
     function terminate() {
         if (!state.initialized) return;
         // Idempotent: repeated Terminate()/unload pairs never double-persist
-        // time (the unload beacon computes a ~0 delta after this persist).
+        // time (persistSync computes a ~0 delta after this persist).
         if (state.terminated) return;
         state.terminated = true;
         if (state.scalars['cmi.core.session_time'] === undefined && state.scalars['cmi.session_time'] === undefined) {
             var key = is2004() ? 'cmi.session_time' : 'cmi.core.session_time';
             state.scalars[key] = formatDuration(Date.now() - state.sessionStartedAt);
         }
-        persist(true);
+        // Synchronous final persist: lands BEFORE redirectToExit() navigates or
+        // blanks the frame, so suspend_data/location always reach the server.
+        // Only finalize on success so handleUnload()'s beforeunload persist can
+        // still retry (sync + beacon) if this one failed.
+        if (persistSync(true)) state.finalized = true;
+    }
+
+    // Synchronous final persist: sendBeacon is not reliable across all browsers
+    // on iframe + top-window navigation, and window.stop() aborts the async
+    // persist fetch. A synchronous XHR in `beforeunload` guarantees the final
+    // state (suspend_data/location) reaches the server before the page tears
+    // down. One-shot via state.finalized so beforeunload+unload don't double.
+    function persistSync(terminating) {
+        try {
+            var payload = buildPayload(terminating, true); // reuse failed request_id
+            state.commitCount += 1;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', API_ENDPOINT, false); // synchronous
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.send(JSON.stringify(payload));
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 
     function handleUnload() {
         if (!state.initialized) return;
-        // Terminate() may have already persisted; the delta mechanism makes
-        // this beacon safe (≈0ms) — but a beacon still fires so a final
-        // state lands even when Terminate's fetch was aborted by the browser.
+        if (state.finalized) return; // beforeunload + unload both fire
+        state.finalized = true;
         state.terminated = true;
-        var payload = buildPayload(true, true); // reuse a failed persist's request_id
-        if (navigator.sendBeacon) {
-            try {
-                // Plain string body: sendBeacon sends it as text/plain; the
-                // server json_decodes php://input regardless of content type.
-                navigator.sendBeacon(API_ENDPOINT, JSON.stringify(payload));
-            } catch (e) {
-                persist(true);
-            }
-        } else {
-            persist(true);
+        // Synchronous final commit first; beacon only as a fallback.
+        if (!persistSync(true)) {
+            try { navigator.sendBeacon(API_ENDPOINT, JSON.stringify(buildPayload(true, true))); } catch (e) {}
         }
     }
 
     // Take over exit navigation (Storyline frames the exit URL otherwise).
     function redirectToExit() {
+        var exitTarget = (window.top && window.top !== window.self) ? window.top : window;
         try {
-            if (window.top && window.top !== window.self) {
-                window.top.location.href = EXIT_URL;
-            } else {
-                window.location.href = EXIT_URL;
-            }
+            exitTarget.location.href = EXIT_URL;
         } catch (e) {
             try { window.location.href = EXIT_URL; } catch (e2) {}
         }
-        // Blank this frame so Storyline's own exit navigation can't render a
-        // non-frameable page (X-Frame-Options: DENY). Give the final commit a
-        // moment to flush (the unload beacon covers anything it aborts).
-        setTimeout(function () {
-            try { window.location.replace('about:blank'); } catch (e3) {}
-        }, 250);
+        // Immediately blank THIS frame so Storyline's own exit navigation (which
+        // often targets '/' or another non-frameable page) can never be framed —
+        // X-Frame-Options: DENY errors. The unload beacon still delivers the
+        // final commit (same request_id, deduped server-side).
+        try { window.stop(); } catch (e3) {}
+        try { window.location.replace('about:blank'); } catch (e4) {}
     }
 
     function install() {
