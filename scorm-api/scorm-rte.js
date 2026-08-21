@@ -27,6 +27,14 @@
     // ── Configuration (injected by serve.php) ──
     var cfg = window.SCORM_PACKAGE_CONFIG || {};
     var API_ENDPOINT = cfg.apiEndpoint || '/scorm-api/store.php';
+    // Compatibility mode accepts cross-version spellings (1.2 elements on 2004
+    // packages and vice versa). Enabled by default (serve.php sends
+    // compatMode:true unless SCORM_COMPAT_MODE=0 in .env). Strict mode requires
+    // content to use exactly the declared SCORM API.
+    var COMPAT_MODE = !cfg || cfg.compatMode !== false;
+    if (COMPAT_MODE) {
+        console.warn('[SCORM-RTE] Compatibility mode ON — accepting cross-version SCORM spellings.');
+    }
     var PACKAGE_ID = parseInt(cfg.pkg || 0, 10);
     var SCO_ID = parseInt(cfg.sco || 0, 10);
     var SCORM_VERSION = cfg.version === '2004' ? '2004' : '1.2';
@@ -140,15 +148,21 @@
         'cmi.suspend_data', 'cmi.launch_data', 'cmi.comments', 'cmi.comments_from_lms',
         'cmi.student_data.mastery_score', 'cmi.student_data.max_time_allowed',
         'cmi.student_data.time_limit_action', 'cmi.student_data.credit', 'cmi.student_data.lesson_mode',
-        'cmi.student_data.attempt_number',
-        // 2004 spellings accepted on 1.2 packages (cross-version exporters)
-        'cmi.completion_status', 'cmi.success_status', 'cmi.location', 'cmi.score.scaled',
-        'cmi.score.raw', 'cmi.score.max', 'cmi.score.min', 'cmi.entry', 'cmi.exit',
-        'cmi.mode', 'cmi.credit', 'cmi.session_time', 'cmi.total_time', 'cmi.progress_measure',
-        'cmi.completion_threshold', 'cmi.scaled_passing_score', 'cmi.learner_id', 'cmi.learner_name',
-        'cmi._version', 'cmi._children', 'cmi.max_time_allowed', 'cmi.time_limit_action',
-        'cmi.launch_data'
+        'cmi.student_data.attempt_number'
     ]);
+    if (COMPAT_MODE) {
+        // 2004 spellings accepted on 1.2 packages (cross-version exporters)
+        (function (list) {
+            for (var i = 0; i < list.length; i++) { READ12[list[i]] = 1; }
+        })([
+            'cmi.completion_status', 'cmi.success_status', 'cmi.location', 'cmi.score.scaled',
+            'cmi.score.raw', 'cmi.score.max', 'cmi.score.min', 'cmi.entry', 'cmi.exit',
+            'cmi.mode', 'cmi.credit', 'cmi.session_time', 'cmi.total_time', 'cmi.progress_measure',
+            'cmi.completion_threshold', 'cmi.scaled_passing_score', 'cmi.learner_id', 'cmi.learner_name',
+            'cmi._version', 'cmi._children', 'cmi.max_time_allowed', 'cmi.time_limit_action',
+            'cmi.launch_data'
+        ]);
+    }
     for (var k in READ12) { WRITE12[k] = 1; }
 
     (function (list) {
@@ -162,13 +176,19 @@
         'cmi.location', 'cmi.max_time_allowed', 'cmi.mode', 'cmi.objectives._count',
         'cmi.progress_measure', 'cmi.scaled_passing_score', 'cmi.score.scaled', 'cmi.score.raw',
         'cmi.score.min', 'cmi.score.max', 'cmi.session_time', 'cmi.success_status',
-        'cmi.suspend_data', 'cmi.time_limit_action', 'cmi.total_time', 'cmi._children',
-        // 1.2 spellings accepted on 2004 packages (cross-version exporters)
-        'cmi.core.lesson_status', 'cmi.core.lesson_location', 'cmi.core.entry', 'cmi.core.exit',
-        'cmi.core.credit', 'cmi.core.lesson_mode', 'cmi.core.session_time', 'cmi.core.total_time',
-        'cmi.core.score.raw', 'cmi.core.score.max', 'cmi.core.score.min', 'cmi.core.student_id',
-        'cmi.core.student_name'
+        'cmi.suspend_data', 'cmi.time_limit_action', 'cmi.total_time', 'cmi._children'
     ]);
+    if (COMPAT_MODE) {
+        // 1.2 spellings accepted on 2004 packages (cross-version exporters)
+        (function (list) {
+            for (var i = 0; i < list.length; i++) { READ2004[list[i]] = 1; }
+        })([
+            'cmi.core.lesson_status', 'cmi.core.lesson_location', 'cmi.core.entry', 'cmi.core.exit',
+            'cmi.core.credit', 'cmi.core.lesson_mode', 'cmi.core.session_time', 'cmi.core.total_time',
+            'cmi.core.score.raw', 'cmi.core.score.max', 'cmi.core.score.min', 'cmi.core.student_id',
+            'cmi.core.student_name'
+        ]);
+    }
     for (var k2 in READ2004) { WRITE2004[k2] = 1; }
 
     // Read-only (LMS-owned) elements — writes are refused with a writable error.
@@ -653,6 +673,10 @@
 
     // Synchronous resume-state load during Initialize() so the very first
     // GetValue() returns saved state (SCORM content expects a synchronous LMS).
+    // NOTE: synchronous XHR intentionally has NO timeout — the XHR spec forbids
+    // setting `timeout` on synchronous requests — and briefly blocks the main
+    // thread. The payload here is minimal, and any failure falls back to the
+    // async persist() path so tracking is not lost.
     function loadInitialStateSync() {
         try {
             var xhr = new XMLHttpRequest();
@@ -811,24 +835,28 @@
     // SCORM 1.2 packages sometimes use window.onunload
     window.onunload = handleUnload;
 
-    // Expose diagnostics for the player's admin panel and debugging.
-    window.__SCORM_RTE__ = {
-        rteVersion: RTE_VERSION,
-        version: SCORM_VERSION,
-        edition: SCORM_EDITION,
-        suspendLimit: SUSPEND_LIMIT,
-        initialized: function () { return state.initialized; },
-        terminated: function () { return state.terminated; },
-        getState: function () { return state.scalars; },
-        getAttemptId: function () { return state.attemptId; },
-        getCommitCount: function () { return state.commitCount; },
-        getInteractionCount: function () { return Object.keys(state.interactions).length; },
-        getObjectiveCount: function () { return Object.keys(state.objectives).length; },
-        getCommentCount: function () { return state.comments.length; },
-        getSuspendDataLength: function () { return (state.scalars['cmi.suspend_data'] || '').length; },
-        getErrors: function () { return state.errors.slice(); },
-        getLastError: function () { return state.lastError; },
-        entry: function () { return state.entry; }
-    };
+    // Expose diagnostics ONLY when the player explicitly opts in (admin
+    // ?diag=1, reflected in cfg.debugRte). Keeps learner state out of the
+    // page for normal launches.
+    if (cfg && cfg.debugRte) {
+        window.__SCORM_RTE__ = {
+            rteVersion: RTE_VERSION,
+            version: SCORM_VERSION,
+            edition: SCORM_EDITION,
+            suspendLimit: SUSPEND_LIMIT,
+            initialized: function () { return state.initialized; },
+            terminated: function () { return state.terminated; },
+            getState: function () { return state.scalars; },
+            getAttemptId: function () { return state.attemptId; },
+            getCommitCount: function () { return state.commitCount; },
+            getInteractionCount: function () { return Object.keys(state.interactions).length; },
+            getObjectiveCount: function () { return Object.keys(state.objectives).length; },
+            getCommentCount: function () { return state.comments.length; },
+            getSuspendDataLength: function () { return (state.scalars['cmi.suspend_data'] || '').length; },
+            getErrors: function () { return state.errors.slice(); },
+            getLastError: function () { return state.lastError; },
+            entry: function () { return state.entry; }
+        };
+    }
 
 })();

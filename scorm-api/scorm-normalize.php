@@ -204,6 +204,17 @@ if (!function_exists('scormNormalizeStatuses')) {
         }
 
         // ---- Normalized success ----
+        // 'passed' | 'failed' | 'unknown' | ''  ('' = not reported)
+        $normalizedSuccess = '';
+        if ($success === 'passed') {
+            $normalizedSuccess = 'passed';
+        } elseif ($success === 'failed') {
+            $normalizedSuccess = 'failed';
+        } elseif (in_array($lessonStatus, ['passed', 'failed'], true) && $success === '') {
+            $normalizedSuccess = $lessonStatus === 'passed' ? 'passed' : 'failed';
+        } elseif ($success === 'unknown') {
+            $normalizedSuccess = 'unknown';
+        }
 
         // ---- Score-based pass inference (documented, derived) ----
         $source = 'status';
@@ -308,15 +319,3 @@ if (!function_exists('scormDetectEdition')) {
         return '';
     }
 }
-
-        // 'passed' | 'failed' | 'unknown' | ''  ('' = not reported)
-        $normalizedSuccess = '';
-        if ($success === 'passed') {
-            $normalizedSuccess = 'passed';
-        } elseif ($success === 'failed') {
-            $normalizedSuccess = 'failed';
-        } elseif (in_array($lessonStatus, ['passed', 'failed'], true) && $success === '') {
-            $normalizedSuccess = $lessonStatus === 'passed' ? 'passed' : 'failed';
-        } elseif ($success === 'unknown') {
-            $normalizedSuccess = 'unknown';
-        }

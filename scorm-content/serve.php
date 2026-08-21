@@ -97,10 +97,27 @@ if (!isset($_SESSION['user_id'])) {
     redirectTo('login/');
 }
 
+// ── Short-lived context cookie for nginx asset routing ──
+// Rise/Storyline compute some asset URLs at runtime (no t= query and, with some
+// privacy tools, no Referer). The nginx /scorm-content/ router falls back to
+// this HttpOnly cookie to recover pkg + token. Same value as the t= token but
+// HttpOnly, so page JavaScript cannot read it.
+if ($_serveToken !== '' && $_pkgIdForToken > 0 && !$_isAssetRequest) {
+    setcookie('scorm_ctx', $_pkgIdForToken . ':' . $_serveToken, [
+        'expires'  => time() + 3600,
+        'path'     => '/scorm-content/',
+        'httponly' => true,
+        'samesite' => 'Lax',
+        'secure'   => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'),
+    ]);
+}
+
 // ── Load package ──
 $packageId = (int)($_GET['pkg'] ?? 0);
 $rawPath = (string)($_GET['path'] ?? '(none)');
-error_log('[SERVE] ENTRY pkg=' . $packageId . ' path=' . $rawPath . ' s3cfg=' . (isS3Configured() ? '1' : '0') . ' uri=' . ($_SERVER['REQUEST_URI'] ?? '?'));
+// Never log tokenized URLs — `t=` is a 4-hour bearer credential.
+$serveRedactUri = preg_replace('/[?&]t=[^&]*/', '', (string)($_SERVER['REQUEST_URI'] ?? '?'));
+error_log('[SERVE] ENTRY pkg=' . $packageId . ' path=' . $rawPath . ' s3cfg=' . (isS3Configured() ? '1' : '0') . ' uri=' . $serveRedactUri);
 if ($packageId <= 0) {
     error_log('[SERVE] EXIT 400: invalid package');
     http_response_code(400);
@@ -712,6 +729,13 @@ $inject = "<script>window.SCORM_PACKAGE_CONFIG = " . json_encode([
     // Serve token — lets scorm-rte.js authenticate its store.php tracking POST
     // without the session cookie (SameSite=Lax isn't sent from inside the iframe).
     'token' => (string)($_GET['t'] ?? ''),
+    // Only expose the RTE diagnostics global when the player explicitly opts in
+    // (admin ?diag=1), so learner state stays out of page JS otherwise.
+    'debugRte' => !empty($_GET['diag']),
+    // Compatibility mode: accept cross-version spellings (1.2 on 2004 and vice
+    // versa) which many Storyline/Rise packages need. Set SCORM_COMPAT_MODE=0
+    // in .env to enable strict per-version conformance globally.
+    'compatMode' => !(defined('SCORM_COMPAT_MODE') && SCORM_COMPAT_MODE === '0'),
     // Where the top window should navigate when the course exits
     // (LMSFinish / Terminate). Used by scorm-rte.js to take over the exit
     // navigation from Storyline, which otherwise frames the exit URL and

@@ -81,13 +81,18 @@ if (!empty($_GET['redirect'])) {
 $currentUser = getCurrentUser();
 $coursePageUrl = buildUrl('course-page/');
 
+// Never log tokenized URLs — `t=` is a 4-hour bearer credential.
+$redactToken = function (string $url): string {
+    return preg_replace('/[?&]t=[^&]*/', '', $url);
+};
+
 // Diagnostics
 error_log(sprintf(
     '[SCORM-PLAYER] pkg=%d sco=%d contentUrl=%s fallbackUrl=%s user=%s',
     $packageId,
     $scoId,
-    $contentUrl,
-    $fallbackUrl,
+    $redactToken($contentUrl),
+    $redactToken($fallbackUrl),
     $currentUser['email'] ?? '?'
 ));
 
@@ -101,14 +106,20 @@ $showDiag = isAdmin() && !empty($_GET['diag']);
 $debugInfo = json_encode([
     'pkg'          => $packageId,
     'sco'          => $scoId,
-    'contentUrl'   => $contentUrl,
-    'fallbackUrl'  => $fallbackUrl,
+    'contentUrl'   => $redactToken($contentUrl),
+    'fallbackUrl'  => $redactToken($fallbackUrl),
     's3Configured' => $s3Configured,
     'serveExists'  => $serveFileExists,
     'user'         => $currentUser['email'] ?? '?',
-    'token'        => substr($serveToken, 0, 12) . '...',
     'showDiag'     => $showDiag,
 ]);
+
+// Admin ?diag=1 additionally asks the RTE inside the iframe to expose its
+// diagnostics global (serve.php enables debugRte when it sees diag=1).
+$iframeSrc = $contentUrl;
+if ($showDiag) {
+    $iframeSrc .= '&diag=1';
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -411,7 +422,7 @@ $debugInfo = json_encode([
         </div>
 
         <iframe id="scormFrame"
-                src="<?php echo htmlspecialchars($contentUrl); ?>"
+                src="<?php echo htmlspecialchars($iframeSrc); ?>"
                 allow="autoplay; fullscreen; microphone; camera; midi; encrypted-media; display-capture; clipboard-read; clipboard-write"
                 allowfullscreen
                 referrerpolicy="no-referrer-when-downgrade"></iframe>

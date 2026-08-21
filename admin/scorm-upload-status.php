@@ -51,5 +51,6 @@ try {
     ]);
 } catch (Throwable $e) {
     error_log('[STATUS] Error: ' . $e->getMessage());
-    echo json_encode(['ok' => false, 'error' => 'Server error: ' . $e->getMessage()]);
+    // Never echo raw exception text to the browser.
+    echo json_encode(['ok' => false, 'error' => 'Server error. Please try again later.']);
 }

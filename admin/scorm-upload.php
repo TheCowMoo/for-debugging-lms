@@ -709,13 +709,23 @@ $servePreviewUrl = function (int $pkgId): string {
         });
 
         // —— S3 Repair ——
+        function getCsrfToken() {
+            const el = document.querySelector('input[name="csrf_token"]');
+            return el ? el.value : '';
+        }
+
         function repairPkg(pkgId, title) {
             const btn = document.getElementById('repair-btn-' + pkgId);
             const res = document.getElementById('repair-result-' + pkgId);
             btn.disabled = true;
             btn.textContent = 'Repairing…';
             res.innerHTML = '';
-            fetch('scorm-s3-resync.php?pkg=' + pkgId, { method: 'POST', credentials: 'same-origin' })
+            fetch('scorm-s3-resync.php?pkg=' + pkgId, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ csrf_token: getCsrfToken() })
+            })
                 .then(r => r.json())
                 .then(data => {
                     btn.disabled = false;
@@ -739,7 +749,12 @@ $servePreviewUrl = function (int $pkgId): string {
             btn.disabled = true;
             btn.textContent = 'Repairing…';
             res.innerHTML = '<div class="alert" style="background:#fff7ed;color:#92400e;">Running S3 repair for all packages… This may take a few minutes for large packages.</div>';
-            fetch('scorm-s3-resync.php?all=1', { method: 'POST', credentials: 'same-origin' })
+            fetch('scorm-s3-resync.php?all=1', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ csrf_token: getCsrfToken() })
+            })
                 .then(r => r.json())
                 .then(data => {
                     btn.disabled = false;

@@ -20,6 +20,18 @@ require_once __DIR__ . '/../bootstrap.php';
 requireLogin();
 requireAdmin();
 
+// CSRF guard — this endpoint performs state-changing S3 uploads.
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $rawBody   = file_get_contents('php://input');
+    $bodyData  = json_decode((string)$rawBody, true);
+    $csrfToken = (string)($bodyData['csrf_token'] ?? ($_POST['csrf_token'] ?? ''));
+    if (!validateCsrfToken($csrfToken)) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'error' => 'Invalid or missing CSRF token.']);
+        exit;
+    }
+}
+
 set_time_limit(0);
 ini_set('memory_limit', '256M'); // Low — we stream files, not load them
 
@@ -33,6 +45,13 @@ if (!isS3Configured()) {
 $isDryRun = ($_SERVER['REQUEST_METHOD'] !== 'POST');
 $allPkgs  = !$isDryRun && (isset($_GET['all']) || isset($_POST['all']));
 $pkgId    = (int)($_GET['pkg'] ?? $_POST['pkg'] ?? 0);
+
+// Bulk repair iterates every package inside one request — super-admin only.
+if ($allPkgs && !isSuperAdmin()) {
+    http_response_code(403);
+    echo json_encode(['ok' => false, 'error' => 'Bulk repair requires super-admin privileges.']);
+    exit;
+}
 
 if (!$allPkgs && $pkgId <= 0) {
     http_response_code(400);

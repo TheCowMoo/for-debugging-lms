@@ -138,29 +138,44 @@ if ($zip->open($tmpPath) !== true) {
     exit(1);
 }
 
-// Replace mode: clear the previous version before extracting the new one.
+// Replace mode: extract to a STAGING directory first. The previous version is
+// only destroyed (replaceCleanup) after the new content is extracted, parsed,
+// and validated — a failed replace never destroys the working course.
+$stagingDir = '';
 if ($replaceFlag) {
-    jobUpdate($jobId, 'running', 'Clearing previous package content...', 3);
-    replaceCleanup($pkgId);
+    $stagingDir = SCORM_STORAGE_PATH . '/.staging_' . $pkgId . '_' . $jobId;
+    if (is_dir($stagingDir)) {
+        $itX = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($stagingDir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($itX as $fX) {
+            $fX->isDir() ? @rmdir($fX->getRealPath()) : @unlink($fX->getRealPath());
+        }
+        @rmdir($stagingDir);
+    }
 }
 
 // ── Step 2: Extract ──
 $packageDir = SCORM_STORAGE_PATH . '/' . $pkgId;
-if (!is_dir($packageDir)) {
-    mkdir($packageDir, 0755, true);
+// In replace mode we extract into staging so the live package is untouched
+// until the new content is fully validated.
+$extractTarget = ($replaceFlag && $stagingDir !== '') ? $stagingDir : $packageDir;
+if (!is_dir($extractTarget)) {
+    mkdir($extractTarget, 0755, true);
 }
 
 $extractedCount = 0;
 try {
     jobUpdate($jobId, 'running', 'Extracting files…', 10);
     if ($stripPfx === '') {
-        if (!$zip->extractTo($packageDir)) {
+        if (!$zip->extractTo($extractTarget)) {
             throw new RuntimeException('ZipArchive::extractTo() returned false');
         }
-        $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($packageDir, FilesystemIterator::SKIP_DOTS));
+        $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($extractTarget, FilesystemIterator::SKIP_DOTS));
         foreach ($rii as $f) { if ($f->isFile()) $extractedCount++; }
     } else {
-        $tmpExtractDir = $packageDir . '_extract_tmp';
+        $tmpExtractDir = $extractTarget . '_extract_tmp';
         if (!is_dir($tmpExtractDir)) mkdir($tmpExtractDir, 0755, true);
         if (!$zip->extractTo($tmpExtractDir)) {
             throw new RuntimeException('ZipArchive::extractTo() returned false');
@@ -171,7 +186,7 @@ try {
             foreach ($rii as $f) {
                 if (!$f->isFile()) continue;
                 $rel  = substr($f->getPathname(), strlen($srcBase) + 1);
-                $dest = $packageDir . DIRECTORY_SEPARATOR . $rel;
+                $dest = $extractTarget . DIRECTORY_SEPARATOR . $rel;
                 $ddir = dirname($dest);
                 if (!is_dir($ddir)) mkdir($ddir, 0755, true);
                 rename($f->getPathname(), $dest);
@@ -187,6 +202,17 @@ try {
     error_log('[WORKER] Extraction failed: ' . $e->getMessage());
     $zip->close();
     @unlink($tmpPath);
+    // Remove partial staging so the previous version stays intact.
+    if ($replaceFlag && $stagingDir !== '' && is_dir($stagingDir)) {
+        $itY = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($stagingDir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($itY as $fY) {
+            $fY->isDir() ? @rmdir($fY->getRealPath()) : @unlink($fY->getRealPath());
+        }
+        @rmdir($stagingDir);
+    }
     jobUpdate($jobId, 'failed', 'Extraction failed: ' . $e->getMessage(), 0);
     if (!$replaceFlag) rollbackPkg($pkgId);
     exit(1);
@@ -200,10 +226,44 @@ if ($extractedCount === 0) {
     exit(1);
 }
 
+// Replace mode: new content extracted successfully — now swap it into place.
+if ($replaceFlag && $stagingDir !== '') {
+    $stagingCount = 0;
+    $itC = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($stagingDir, FilesystemIterator::SKIP_DOTS));
+    foreach ($itC as $fc) { if ($fc->isFile()) $stagingCount++; }
+    if ($stagingCount === 0) {
+        error_log("[WORKER] Staging dir empty for pkg=$pkgId — aborting replace.");
+        if (is_dir($stagingDir)) { @rmdir($stagingDir); }
+        jobUpdate($jobId, 'failed', 'Replace aborted: staging directory was empty.', 0);
+        exit(1);
+    }
+    jobUpdate($jobId, 'running', 'Validated new content — replacing previous version…', 60);
+    replaceCleanup($pkgId);
+    if (!is_dir($packageDir)) mkdir($packageDir, 0755, true);
+    $itM = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($stagingDir, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($itM as $fm) {
+        $relM  = substr($fm->getPathname(), strlen($stagingDir) + 1);
+        $destM = $packageDir . DIRECTORY_SEPARATOR . $relM;
+        if ($fm->isDir()) {
+            if (!is_dir($destM)) mkdir($destM, 0755, true);
+        } else {
+            $ddM = dirname($destM);
+            if (!is_dir($ddM)) mkdir($ddM, 0755, true);
+            rename($fm->getPathname(), $destM);
+        }
+    }
+    @rmdir($stagingDir);
+    error_log("[WORKER] Replaced pkg=$pkgId with validated content ($extractedCount files).");
+}
+
 error_log("[WORKER] Extracted $extractedCount files for pkg=$pkgId");
 jobUpdate($jobId, 'running', "Extracted $extractedCount files. Uploading to S3…", 30);
 
 // ── Step 3: S3 Upload ──
+$s3Failed = 0;
 if (isS3Configured()) {
     $s3Count  = 0;
     $s3Failed = 0;
@@ -282,6 +342,13 @@ if (isS3Configured()) {
 
     error_log("[WORKER] S3 complete: $s3Count uploaded, $s3Failed failed, " . count($s3Gaps) . " gaps filled");
 }
+
+if ($s3Failed > 0) {
+    error_log("[WORKER] S3 upload incomplete: $s3Failed files missing from S3 — failing job.");
+    jobUpdate($jobId, 'failed', "S3 upload incomplete: $s3Failed files missing from S3. Use the admin Repair action after resolving the cause.", 0);
+    exit(1);
+}
+
 
 jobUpdate($jobId, 'running', 'S3 upload complete. Parsing manifest…', 85);
 

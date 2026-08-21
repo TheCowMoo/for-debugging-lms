@@ -113,7 +113,8 @@ foreach ($routeTests as $label => $url) {
         CURLOPT_URL => $url,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 5,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_FOLLOWLOCATION => false,
     ]);
     $resp = curl_exec($ch);

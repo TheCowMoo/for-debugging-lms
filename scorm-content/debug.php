@@ -11,6 +11,8 @@
 
 require_once __DIR__ . '/../bootstrap.php';
 requireLogin();
+// Debug tool prints S3 config, DB internals, and raw content — ADMIN ONLY.
+requireAdmin();
 
 header('Content-Type: text/plain; charset=utf-8');
 
@@ -54,7 +56,7 @@ if (function_exists('isS3Configured')) {
 }
 echo "S3_BUCKET:      " . (defined('S3_BUCKET') ? S3_BUCKET : '(not defined)') . "\n";
 echo "S3_REGION:      " . (defined('S3_REGION') ? S3_REGION : '(not defined)') . "\n";
-echo "S3_KEY set:     " . (defined('S3_KEY') && S3_KEY !== '' ? "YES (" . substr(S3_KEY, 0, 6) . "...)" : "NO") . "\n";
+echo "S3_KEY set:     " . (defined('S3_KEY') && S3_KEY !== '' ? "YES" : "NO") . "\n";
 echo "S3_SECRET set:  " . (defined('S3_SECRET') && S3_SECRET !== '' ? "YES (hidden)" : "NO") . "\n";
 echo "S3_ENDPOINT:    " . (defined('S3_ENDPOINT') && S3_ENDPOINT !== '' ? S3_ENDPOINT : '(default AWS)') . "\n";
 echo "S3_DEBUG:       " . (defined('S3_DEBUG') ? (S3_DEBUG ? 'ON' : 'off') : '(not defined)') . "\n";
@@ -90,7 +92,13 @@ echo "\n";
 if ($packageId <= 0) {
     echo "No package ID specified. Add ?pkg=N to the URL to trace a specific package.\n";
     echo "\nEnter a package ID to test:\n";
-    $pkgs = $pdo->query("SELECT id, title, status FROM scorm_packages ORDER BY id DESC LIMIT 10")->fetchAll(PDO::FETCH_ASSOC);
+    // Scope the listing to the current organization (super admins see all).
+    if (!isSuperAdmin() && getOrgId() === null) {
+        echo "ACCESS DENIED: no organization context for non-super-admin debug.\n";
+        exit;
+    }
+    $pkgScope = isSuperAdmin() ? '' : " WHERE organization_id = " . (int)getOrgId();
+    $pkgs = $pdo->query("SELECT id, title, status FROM scorm_packages" . $pkgScope . " ORDER BY id DESC LIMIT 10")->fetchAll(PDO::FETCH_ASSOC);
     foreach ($pkgs as $p) {
         echo "  pkg={$p['id']}  [{$p['status']}]  {$p['title']}\n";
     }
@@ -118,6 +126,12 @@ if (!$pkg) {
 
 echo "✅ Package found:\n";
 echo "  ID:          {$pkg['id']}\n";
+// Cross-tenant guard: non-super-admins may only inspect their own org's packages.
+if (!isSuperAdmin() && !empty($pkg['organization_id']) && (int)$pkg['organization_id'] !== (int)getOrgId()) {
+    echo "ACCESS DENIED: package #$packageId belongs to another organization.";
+    exit;
+}
+
 echo "  Title:       {$pkg['title']}\n";
 echo "  Status:      {$pkg['status']}\n";
 echo "  SCORM ver:   {$pkg['scorm_version']}\n";
@@ -317,7 +331,8 @@ if (!$s3Available) {
         ],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 15,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
     ]);
     $listResp = curl_exec($ch);
     $listStatus = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -346,12 +361,12 @@ if (!$s3Available) {
         } else {
             echo "  ⚠️  Could not parse XML response.\n";
             echo "  Raw response (first 500 chars):\n";
-            echo "  " . substr($listResp, 0, 500) . "\n";
+            echo "  " . substr($listResp, 0, 200) . "\n";
         }
     } else {
         echo "  ❌ LIST failed.\n";
         echo "  Response body (first 500 chars):\n";
-        echo "  " . substr((string)$listResp, 0, 500) . "\n";
+        echo "  " . substr((string)$listResp, 0, 200) . "\n";
     }
     echo "\n";
 }
@@ -413,7 +428,7 @@ if (!$s3Available) {
     } else {
         echo "  body length: " . strlen((string)$rawResult['body']) . " bytes\n";
         // Show first bytes
-        $preview = substr((string)$rawResult['body'], 0, 300);
+        $preview = substr((string)$rawResult['body'], 0, 120);
         echo "  First 300 chars: $preview\n";
     }
     echo "\n";
@@ -429,7 +444,7 @@ echo "  user_role:       " . ($_SESSION['user_role'] ?? '(none)') . "\n";
 echo "  organization_id: " . ($_SESSION['organization_id'] ?? 'NULL') . "\n";
 echo "  isSuperAdmin():  " . (isSuperAdmin() ? 'YES' : 'NO') . "\n";
 echo "  isTestUser():    " . (function_exists('isTestUser') && isTestUser() ? 'YES' : 'NO') . "\n";
-echo "  session_id:      " . session_id() . "\n\n";
+echo "  session_id:      " . substr((string)session_id(), 0, 8) . "... (redacted)\n\n";
 
 // ──────────────────────────────────────────────────
 // 12. SCORM Player iframe URL test

@@ -146,13 +146,17 @@ if (!isset($_SESSION['user_id'])) {
     if ($serveToken !== '' && $packageId > 0) {
         $tokenUserId = validateServeToken($serveToken, $packageId);
         if ($tokenUserId !== null) {
-            $_SESSION['user_id'] = $tokenUserId;
             try {
                 $tokPdo  = getDbConnection();
                 $tokStmt = $tokPdo->prepare('SELECT role, organization_id FROM users WHERE id = ? LIMIT 1');
                 $tokStmt->execute([$tokenUserId]);
                 $tokUser = $tokStmt->fetch(PDO::FETCH_ASSOC);
-                if ($tokUser) {
+                if (!$tokUser) {
+                    // Deleted user — the serve token must not grant access.
+                    error_log('[SCORM-STORE] serve token rejected: user ' . $tokenUserId . ' no longer exists.');
+                    $tokenUserId = null;
+                } else {
+                    $_SESSION['user_id']       = $tokenUserId;
                     $_SESSION['user_role']       = $tokUser['role'] ?? 'student';
                     $_SESSION['organization_id'] = $tokUser['organization_id'] ?? null;
                 }

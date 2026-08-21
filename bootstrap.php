@@ -128,6 +128,12 @@ define('SCORM_MAX_UPLOAD_SIZE', 512 * 1024 * 1024); // 512 MB max package size
 // The directory lives under content/ which is protected by .htaccess (deny all).
 define('SCORM_CACHE_PATH', getenv('SCORM_CACHE_PATH') ?: (__DIR__ . '/content/cache/scorm'));
 
+// SCORM runtime compatibility mode:
+//   '1' (default) — RTE accepts cross-version spellings (1.2 elements on 2004
+//                   packages and vice versa) for maximum Storyline/Rise compatibility.
+//   '0'           — strict mode: content must use exactly the declared SCORM API.
+define('SCORM_COMPAT_MODE', getenv('SCORM_COMPAT_MODE') ?: '1');
+
 // SCORM backend selection:
 //   native — use the native SCORM reader tables only
 //   moodle — use the Moodle API bridge only (legacy)
