@@ -711,6 +711,9 @@
             if (!state.initialized) { setError(ERR.GENERAL_EXCEPTION); return 'false'; }
             terminate();
             setError(ERR.NO_ERROR);
+            // Take over exit navigation — Storyline would otherwise frame the
+            // exit URL inside this iframe (X-Frame-Options: DENY errors).
+            redirectToExit();
             return 'true';
         },
         LMSGetValue: function (el) {
@@ -756,6 +759,9 @@
             if (!state.initialized) { setError(ERR.INITIALIZATION_FAILED); return 'false'; }
             terminate();
             setError(ERR.NO_ERROR);
+            // Take over exit navigation — Storyline would otherwise frame the
+            // exit URL inside this iframe (X-Frame-Options: DENY errors).
+            redirectToExit();
             return 'true';
         },
         GetValue: function (el) {
@@ -823,6 +829,12 @@
         } catch (e) {
             try { window.location.href = EXIT_URL; } catch (e2) {}
         }
+        // Blank this frame so Storyline's own exit navigation can't render a
+        // non-frameable page (X-Frame-Options: DENY). Give the final commit a
+        // moment to flush (the unload beacon covers anything it aborts).
+        setTimeout(function () {
+            try { window.location.replace('about:blank'); } catch (e3) {}
+        }, 250);
     }
 
     function install() {
