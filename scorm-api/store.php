@@ -191,7 +191,7 @@ if (!isSuperAdmin() && $orgId !== null) {
 }
 
 $pkgStmt = $pdo->prepare(
-    "SELECT id, scorm_version, scorm_edition, manifest_xml, mastery_score AS pkg_mastery_score
+    "SELECT id, scorm_version, scorm_edition, manifest_xml
      FROM scorm_packages sp WHERE sp.id = ? AND sp.status = 'active'" . $orgFilter
 );
 $pkgStmt->execute($params);
@@ -297,7 +297,7 @@ $credit          = $normalized['cmi.core.credit'] ?? ($normalized['cmi.credit'] 
 $completionThreshold = $normalized['cmi.completion_threshold'] ?? null;
 $scaledPassingScore  = $normalized['cmi.scaled_passing_score'] ?? null;
 // 1.2 exporters put mastery in cmi.student_data.mastery_score
-$masteryScore = $sco['mastery_score'] ?? ($pkg['pkg_mastery_score'] ?? null);
+$masteryScore = $sco['mastery_score'] ?? null;
 if ($masteryScore === null && isset($normalized['cmi.student_data.mastery_score']) && $normalized['cmi.student_data.mastery_score'] !== '') {
     $masteryScore = (float)$normalized['cmi.student_data.mastery_score'];
 }
