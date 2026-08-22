@@ -83,9 +83,11 @@ if (!hash_equals($expectedToken, $token)) {
     exit;
 }
 
-// Only process queued jobs
-if ($job['status'] !== 'queued') {
-    error_log('[RUN] Job ' . $jobId . ' already in status: ' . $job['status']);
+// Atomically claim the job (queued → running). Only one worker may process it.
+$claim = $pdo->prepare("UPDATE scorm_upload_jobs SET status='running', message='Starting extraction…', progress_pct=5, updated_at=NOW() WHERE id=? AND status='queued'");
+$claim->execute([$jobId]);
+if ($claim->rowCount() === 0) {
+    error_log('[RUN] Job ' . $jobId . ' could not be claimed (current status: ' . $job['status'] . ')');
     exit;
 }
 
@@ -278,7 +280,7 @@ if (isS3Configured()) {
                 error_log('[RUN] S3 upload failed (will retry): ' . $r);
             }
             $doneFiles++;
-            if ($doneFiles % 25 === 0) {
+            if ($doneFiles % 5 === 0 || $doneFiles === $totalFiles) {
                 $pct = 30 + (int)(($doneFiles / max(1, $totalFiles)) * 50);
                 jobUpdate($jobId, 'running', "Uploading to S3: $doneFiles / $totalFiles files…", $pct);
             }

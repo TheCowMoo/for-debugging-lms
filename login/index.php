@@ -104,7 +104,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['auto_launch'])) {
             // ── Account lockout gate ──
             // Generic message: identical whether the email exists or not, so
             // attackers cannot enumerate accounts from the lockout UI.
-            $lock = isAccountLocked($userId, $email);
+            // Best-effort: a lockout-DB failure must not mask the credentials check.
+            try {
+                $lock = isAccountLocked($userId, $email);
+            } catch (Throwable $lockErr) {
+                error_log('[LOGIN LOCKOUT ERROR] isAccountLocked: ' . $lockErr->getMessage());
+                $lock = ['locked' => false, 'remaining_seconds' => 0];
+            }
             if ($lock['locked']) {
                 $cooldownSeconds = $lock['remaining_seconds'];
                 $error = genericLockoutMessage($cooldownSeconds);
@@ -150,17 +156,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['auto_launch'])) {
                 }
             } else {
                 // ── Credentials invalid ──
-                $lockResult = applyFailedLogin($userId, $email);
-                $ipResult = recordLoginAttempt($userId ?: null, $email, false, $lockResult['locked']);
-                logSecurityEvent('login_failure', 'warning', ['reason' => 'bad_credentials'], $userId ?: null, $email);
-                if ($lockResult['locked']) {
-                    logSecurityEvent('account_locked', 'critical', ['email' => $email], $userId ?: null, $email);
-                    checkSecurityAlerts('account_locked', ['email' => $email, 'user_id' => $lockResult['user_id']]);
+                // Lockout/audit bookkeeping is best-effort: a DB/audit failure
+                // must never mask a bad-credentials result with a generic
+                // "connection interrupted" error.
+                $attemptsRemaining = 0;
+                try {
+                    $lockResult = applyFailedLogin($userId, $email);
+                    $ipResult = recordLoginAttempt($userId ?: null, $email, false, $lockResult['locked']);
+                    logSecurityEvent('login_failure', 'warning', ['reason' => 'bad_credentials'], $userId ?: null, $email);
+                    if ($lockResult['locked']) {
+                        logSecurityEvent('account_locked', 'critical', ['email' => $email], $userId ?: null, $email);
+                        checkSecurityAlerts('account_locked', ['email' => $email, 'user_id' => $lockResult['user_id']]);
+                    }
+                    $cooldownSeconds = max($lockResult['remaining_seconds'], $ipResult['ip_remaining_seconds']);
+                    $attemptsRemaining = (int)($lockResult['attempts_remaining'] ?? 0);
+                } catch (Throwable $lockoutErr) {
+                    error_log('[LOGIN LOCKOUT ERROR] bad_credentials bookkeeping: ' . $lockoutErr->getMessage());
+                    $cooldownSeconds = 0;
                 }
-                $cooldownSeconds = max($lockResult['remaining_seconds'], $ipResult['ip_remaining_seconds']);
-                $error = $cooldownSeconds > 0
-                    ? genericLockoutMessage($cooldownSeconds)
-                    : "The credentials provided do not match our records.";
+
+                if ($cooldownSeconds > 0) {
+                    $error = genericLockoutMessage($cooldownSeconds);
+                } elseif ($attemptsRemaining > 0) {
+                    $error = 'Invalid password. ' . $attemptsRemaining . ' attempt' . ($attemptsRemaining === 1 ? '' : 's') . ' remaining before lockout.';
+                } else {
+                    $error = 'Invalid password.';
+                }
             }
         } catch (PDOException $e) {
             error_log('[LOGIN DB ERROR] ' . $e->getMessage());

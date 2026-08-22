@@ -121,7 +121,7 @@ $auditUrl = buildUrl('user-management/security-audit.php');
     <title>Security Audit Log | <?php echo getSiteName(); ?></title>
     <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
+    <link rel="stylesheet" href="<?php echo assetUrl('includes/sidebar.css'); ?>">
     <style>
         <?php renderBrandStyles(); ?>
         :root { --radius: 14px; }

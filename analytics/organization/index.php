@@ -58,6 +58,77 @@ $formatter = function(int $seconds): string {
     $m = floor(($seconds % 3600) / 60);
     return ($h > 0 ? $h . 'h ' : '') . $m . 'm';
 };
+
+// —— Plain-language helpers for the funnel / heatmap / slide-timing cards. ——
+$humanizeDuration = function(float $seconds): string {
+    $s = (int)round($seconds);
+    $h = intdiv($s, 3600);
+    $m = intdiv($s % 3600, 60);
+    $sec = $s % 60;
+    $out = '';
+    if ($h > 0) { $out .= $h . 'h '; }
+    if ($m > 0) { $out .= $m . 'm '; }
+    if ($sec > 0 || ($h === 0 && $m === 0)) { $out .= $sec . 's'; }
+    return trim($out);
+};
+
+$prettyInteractionType = function(?string $type): string {
+    if ($type === null || trim($type) === '') return '—';
+    $map = [
+        'choice'        => 'Multiple choice',
+        'fill-in'       => 'Fill-in-the-blank',
+        'true-false'    => 'True/False',
+        'matching'      => 'Matching',
+        'likert'        => 'Likert scale',
+        'sequencing'    => 'Sequencing',
+        'numeric'       => 'Numeric',
+        'essay'         => 'Essay',
+        'hotspot'       => 'Hotspot',
+        'drag-and-drop' => 'Drag and drop',
+    ];
+    $key = strtolower(preg_replace('/[^a-z0-9]+/i', '-', trim($type)));
+    return $map[$key] ?? ucwords(preg_replace('/[_-]+/', ' ', trim($type)));
+};
+
+$prettyQuestionLabel = function(?string $text): string {
+    $raw = trim((string)$text);
+    if ($raw === '' || $raw === 'Untitled Question') return 'Untitled question';
+    // Already-human descriptions stay as-is; only prettify auto-generated IDs
+    // (e.g. "Scene1_QuestionDraw211_Slide5_MultiChoice_0_0").
+    if (!preg_match('/_/', $raw)) return $raw;
+
+    $label = $raw;
+    $typeNames = [
+        'MultiChoice' => 'Multiple choice',
+        'TrueFalse'   => 'True/False',
+        'FillIn'      => 'Fill-in-the-blank',
+        'Matching'    => 'Matching',
+        'Likert'      => 'Likert scale',
+        'Sequencing'  => 'Sequencing',
+        'Numeric'     => 'Numeric',
+        'Essay'       => 'Essay',
+        'Hotspot'     => 'Hotspot',
+        'DragDrop'    => 'Drag and drop',
+        'DragAndDrop' => 'Drag and drop',
+    ];
+    foreach ($typeNames as $code => $name) {
+        if (stripos($raw, '_' . $code) !== false) { $label = $name; break; }
+    }
+    if (preg_match('/_Slide(\d+)/i', $raw, $m)) {
+        $label = 'Slide ' . (int)$m[1] . ($label !== $raw ? ' · ' . $label : '');
+    } elseif (preg_match('/Question(\d+)/i', $raw, $m)) {
+        $label = 'Question ' . (int)$m[1] . ($label !== $raw ? ' · ' . $label : '');
+    }
+    return $label;
+};
+
+$prettySlideLabel = function(string $label): string {
+    $label = preg_replace('/^(slideTimes|timeSpent|slideState|learner\.data|root)\./i', '', $label);
+    $label = preg_replace('/([a-z0-9])([A-Z])/', '$1 $2', $label);
+    $label = preg_replace('/[._]+/', ' ', $label);
+    $label = preg_replace('/([Ss]lide)\s*(\d+)/', 'Slide $2', $label);
+    return trim(ucwords($label)) !== '' ? trim(ucwords($label)) : 'Slide';
+};
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -67,7 +138,7 @@ $formatter = function(int $seconds): string {
     <title>Organization Analytics | <?php echo getSiteName(); ?></title>
     <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
+    <link rel="stylesheet" href="<?php echo assetUrl('includes/sidebar.css'); ?>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         <?php renderBrandStyles(); ?>
@@ -225,18 +296,20 @@ $formatter = function(int $seconds): string {
 
                 <!-- Knowledge gaps -->
                 <div class="card">
-                    <div class="card-header"><h2>Knowledge Gaps (Lowest Accuracy Questions)</h2></div>
+                    <div class="card-header"><h2>Knowledge Gaps (Lowest Accuracy Questions)</h2><span class="small muted">Questions with the lowest correct-answer rate first</span></div>
                     <div class="card-body" style="padding:0;">
                         <?php if (empty($deptGaps)): ?>
                             <div class="empty">No question-level data for this department.</div>
                         <?php else: ?>
                             <table>
-                                <thead><tr><th>Course</th><th>Question</th><th>Accuracy</th><th>Answers</th><th>Avg Latency</th></tr></thead>
+                                <thead><tr><th>Course</th><th>Question</th><th>Accuracy</th><th>Attempts</th><th>Avg Time</th></tr></thead>
                                 <tbody>
                                 <?php foreach ($deptGaps as $g): ?>
                                     <tr>
                                         <td class="small muted"><?php echo htmlspecialchars($g['course_title']); ?></td>
-                                        <td><?php echo htmlspecialchars($g['description'] ?: $g['interaction_id']); ?></td>
+                                        <td>
+                                            <div title="<?php echo htmlspecialchars($g['interaction_id'] ?? ''); ?>"><?php echo htmlspecialchars($prettyQuestionLabel($g['description'] ?: $g['interaction_id'])); ?></div>
+                                        </td>
                                         <td>
                                             <?php
                                                 $acc = (float)$g['accuracy_pct'];
@@ -245,7 +318,7 @@ $formatter = function(int $seconds): string {
                                             <span class="chip <?php echo $chip; ?>"><?php echo $acc; ?>%</span>
                                         </td>
                                         <td><?php echo (int)$g['total_answers']; ?></td>
-                                        <td class="small muted"><?php echo $g['avg_latency_seconds'] !== null ? round($g['avg_latency_seconds'], 1) . 's' : '—'; ?></td>
+                                        <td class="small muted"><?php echo $g['avg_latency_seconds'] !== null ? $humanizeDuration((float)$g['avg_latency_seconds']) : '—'; ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                                 </tbody>
@@ -299,7 +372,10 @@ $formatter = function(int $seconds): string {
 
             <!-- Completion Funnel -->
             <div class="card">
-                <div class="card-header"><h2>Completion Funnel</h2></div>
+                <div class="card-header">
+                    <h2>Completion Funnel</h2>
+                    <span class="small muted">Across <?php echo (int)array_sum(array_column($funnel, 'count')); ?> enrollments</span>
+                </div>
                 <div class="card-body">
                     <?php $funnelTotal = 0; foreach ($funnel as $f) { $funnelTotal += $f['count']; } ?>
                     <?php if ($funnelTotal === 0): ?>
@@ -314,13 +390,13 @@ $formatter = function(int $seconds): string {
                             <div style="margin-bottom:18px;">
                                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                                     <strong style="font-size:0.9rem;"><?php echo htmlspecialchars($f['stage']); ?></strong>
-                                    <span class="small muted"><?php echo (int)$f['count']; ?> (<?php echo $stagePct; ?>% of enrollments)</span>
+                                    <span class="small muted"><?php echo (int)$f['count']; ?> learner<?php echo (int)$f['count'] === 1 ? '' : 's'; ?> &middot; <?php echo $stagePct; ?>%</span>
                                 </div>
                                 <div class="progress-bar-bg" style="height:14px;">
                                     <div class="progress-bar-fill" style="width:<?php echo $stagePct; ?>%; background:<?php echo $f['color']; ?>;"></div>
                                 </div>
                                 <?php if ($i > 0): ?>
-                                    <div class="small muted" style="margin-top:3px;"><?php echo $convPct; ?>% convert from <?php echo htmlspecialchars($funnel[$i - 1]['stage']); ?></div>
+                                    <div class="small muted" style="margin-top:3px;">&darr; <?php echo (int)$f['count']; ?> of <?php echo (int)$prevCount; ?> &ldquo;<?php echo htmlspecialchars($funnel[$i - 1]['stage']); ?>&rdquo; learners advanced here (<?php echo $convPct; ?>%)</div>
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
@@ -330,13 +406,13 @@ $formatter = function(int $seconds): string {
 
             <!-- Question Performance Heatmap -->
             <div class="card">
-                <div class="card-header"><h2>Question Performance Heatmap</h2><span class="small muted">Weakest questions first</span></div>
+                <div class="card-header"><h2>Question Performance Heatmap</h2><span class="small muted">Questions with the lowest correct-answer rate first</span></div>
                 <div class="card-body" style="padding:0;">
                     <?php if (empty($questionHeatmap)): ?>
                         <div class="empty">No question data yet. Questions appear once learners answer assessments.</div>
                     <?php else: ?>
                         <table>
-                            <thead><tr><th>Course</th><th>Question</th><th>Type</th><th>Answers</th><th>Learners</th><th>Accuracy</th><th>Avg Latency</th></tr></thead>
+                            <thead><tr><th>Course</th><th>Question</th><th>Type</th><th>Attempts</th><th>Learners</th><th>Accuracy</th><th>Avg Time</th></tr></thead>
                             <tbody>
                             <?php foreach ($questionHeatmap as $q): ?>
                                 <?php
@@ -347,15 +423,15 @@ $formatter = function(int $seconds): string {
                                 <tr>
                                     <td style="max-width:200px;"><?php echo htmlspecialchars($q['course_title']); ?></td>
                                     <td style="max-width:280px;">
-                                        <div title="<?php echo htmlspecialchars($q['interaction_id']); ?>"><?php echo htmlspecialchars($q['question_text']); ?></div>
+                                        <div title="<?php echo htmlspecialchars($q['interaction_id']); ?>"><?php echo htmlspecialchars($prettyQuestionLabel($q['question_text'])); ?></div>
                                     </td>
-                                    <td><span class="chip chip-med"><?php echo htmlspecialchars($q['interaction_type'] ?: '—'); ?></span></td>
+                                    <td><span class="chip chip-med"><?php echo htmlspecialchars($prettyInteractionType($q['interaction_type'])); ?></span></td>
                                     <td><?php echo (int)$q['total_answers']; ?></td>
                                     <td><?php echo (int)$q['learners_attempted']; ?></td>
                                     <td>
                                         <span class="badge" style="background:<?php echo $heatBg; ?>; color:<?php echo $heatFg; ?>;"><?php echo $acc; ?>%</span>
                                     </td>
-                                    <td class="small muted"><?php echo $q['avg_latency_seconds'] !== null ? $q['avg_latency_seconds'] . 's' : '—'; ?></td>
+                                    <td class="small muted"><?php echo $q['avg_latency_seconds'] !== null ? $humanizeDuration((float)$q['avg_latency_seconds']) : '—'; ?></td>
                                 </tr>
                             <?php endforeach; ?>
                             </tbody>
@@ -366,24 +442,25 @@ $formatter = function(int $seconds): string {
 
             <!-- Slide-by-Slide Time Breakdown -->
             <div class="card">
-                <div class="card-header"><h2>Slide Time Breakdown</h2><span class="small muted"><?php echo (int)$slideBreakdown['parsed_attempts']; ?> attempts parsed from suspend_data</span></div>
+                <div class="card-header">
+                    <h2>Slide Time Breakdown</h2>
+                    <?php $slideLearners = (int)($slideBreakdown['parsed_attempts'] ?? 0); ?>
+                    <span class="small muted"><?php echo $slideLearners > 0 ? 'Slide timing from ' . $slideLearners . ' learner' . ($slideLearners === 1 ? '' : 's') : 'No learners with slide timing yet'; ?></span>
+                </div>
                 <div class="card-body" style="padding:0;">
                     <?php if (empty($slideBreakdown['has_data']) || empty($slideBreakdown['summary'])): ?>
-                        <div class="empty">Slide timing is embedded in course suspend_data. Data appears once learners use courses built by Rise 360 that expose slide timings.</div>
+                        <div class="empty">No slide-by-slide time data yet. This appears once learners complete courses (such as Rise 360 or Storyline) that report time spent per slide.</div>
                     <?php else: ?>
                         <table>
                             <thead><tr><th>Slide / Section</th><th>Total Time</th><th>Learners</th><th>Avg per Learner</th></tr></thead>
                             <tbody>
                             <?php foreach ($slideBreakdown['summary'] as $s): ?>
-                                <?php
-                                    $mins = round($s['total_seconds'] / 60, 1);
-                                    $avgPerLearner = $s['learner_count'] > 0 ? round($s['total_seconds'] / $s['learner_count'], 1) : 0;
-                                ?>
+                                <?php $avgPerLearner = $s['learner_count'] > 0 ? $s['total_seconds'] / $s['learner_count'] : 0.0; ?>
                                 <tr>
-                                    <td style="max-width:400px;"><?php echo htmlspecialchars($s['label']); ?></td>
-                                    <td><?php echo $mins; ?>m</td>
+                                    <td style="max-width:400px;"><?php echo htmlspecialchars($prettySlideLabel((string)$s['label'])); ?></td>
+                                    <td><?php echo $humanizeDuration((float)$s['total_seconds']); ?></td>
                                     <td><?php echo (int)$s['learner_count']; ?></td>
-                                    <td class="small muted"><?php echo $avgPerLearner; ?>s / learner</td>
+                                    <td class="small muted"><?php echo $humanizeDuration($avgPerLearner); ?> / learner</td>
                                 </tr>
                             <?php endforeach; ?>
                             </tbody>
@@ -422,22 +499,22 @@ $formatter = function(int $seconds): string {
         </div>
 
         <div class="card">
-            <div class="card-header"><h2>Interaction Accuracy &amp; Latency</h2><span class="small muted">Per question id</span></div>
+            <div class="card-header"><h2>Question Accuracy &amp; Time</h2><span class="small muted">Most-attempted questions first</span></div>
             <div class="card-body" style="padding:0;">
                 <?php if (empty($v2InteractionAccuracy)): ?>
                     <div class="empty">No interaction data reported yet.</div>
                 <?php else: ?>
                     <table>
-                        <thead><tr><th>Interaction</th><th>Type</th><th>Attempts</th><th>Correct</th><th>Accuracy %</th><th>Avg Latency</th></tr></thead>
+                        <thead><tr><th>Question</th><th>Type</th><th>Attempts</th><th>Correct</th><th>Accuracy %</th><th>Avg Time</th></tr></thead>
                         <tbody>
                         <?php foreach ($v2InteractionAccuracy as $r): ?>
                             <tr>
-                                <td><?php echo htmlspecialchars($r['interaction_id']); ?></td>
-                                <td class="small muted"><?php echo htmlspecialchars($r['interaction_type'] ?: '—'); ?></td>
+                                <td><div title="<?php echo htmlspecialchars($r['interaction_id']); ?>"><?php echo htmlspecialchars($prettyQuestionLabel($r['interaction_id'])); ?></div></td>
+                                <td class="small muted"><?php echo htmlspecialchars($prettyInteractionType($r['interaction_type'])); ?></td>
                                 <td><?php echo (int)$r['attempts']; ?></td>
                                 <td><?php echo (int)$r['correct']; ?></td>
                                 <td><?php echo $r['accuracy_pct']; ?>%</td>
-                                <td><?php echo $r['avg_latency_s'] !== null ? $r['avg_latency_s'] . 's' : '—'; ?></td>
+                                <td><?php echo $r['avg_latency_s'] !== null ? $humanizeDuration((float)$r['avg_latency_s']) : '—'; ?></td>
                             </tr>
                         <?php endforeach; ?>
                         </tbody>

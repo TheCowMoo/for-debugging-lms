@@ -219,7 +219,7 @@ $userRole = $_SESSION['user_role'] ?? '';
     <title>Course Manager | <?php echo getSiteName(); ?></title>
     <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
+    <link rel="stylesheet" href="<?php echo assetUrl('includes/sidebar.css'); ?>">
     <style>
         <?php renderBrandStyles(); ?>
         :root { --accent: #60B49A; --radius: 16px; }
@@ -769,6 +769,65 @@ $userRole = $_SESSION['user_role'] ?? '';
         form.scrollIntoView({behavior:'smooth'});
     }
 
+    // —— Shared hardened upload-job poller (used by the upload and replace flows). ——
+    // Validates the HTTP response, surfaces errors instead of swallowing them, and
+    // stops polling on failure, timeout, or completion.
+    function stopUploadPolling(state) {
+        if (state && state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+    }
+    function pollUploadJob(jobId, state) {
+        var url = '<?php echo buildUrl("admin/scorm-upload-status.php"); ?>?job_id=' + encodeURIComponent(jobId);
+        fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { 'Accept': 'application/json' } })
+            .then(function(response) {
+                var ctype = (response.headers.get('content-type') || '').toLowerCase();
+                if (!response.ok || ctype.indexOf('application/json') === -1) {
+                    throw new Error('Status request failed (HTTP ' + response.status + '). Your session may have expired — refresh the page and check the server logs.');
+                }
+                return response.json();
+            })
+            .then(function(data) {
+                if (!data.ok) {
+                    stopUploadPolling(state);
+                    state.btn.disabled = false;
+                    state.status.textContent = 'Failed.';
+                    state.result.innerHTML = '<div class="upload-result-error">&#10007; ' + (data.error || 'Error') + '</div>';
+                    return;
+                }
+                var p = data.progress_pct || 0;
+                var barPct = 50 + Math.round(p / 2);
+                state.fill.style.width = barPct + '%';
+                state.pctEl.textContent = barPct + '%';
+                state.status.textContent = data.message || 'Processing…';
+                if (data.status === 'done') {
+                    stopUploadPolling(state);
+                    state.fill.style.width = '100%';
+                    state.pctEl.textContent = '100%';
+                    state.status.textContent = 'Complete!';
+                    state.result.innerHTML = '<div class="upload-result-ok">&#10003; ' + state.doneMsg + ' — "' + (data.title || '').replace(/"/g, '&quot;') + '" (' + (data.scorm_version || '?') + ', ' + (data.sco_count || 0) + ' SCOs).</div>';
+                    setTimeout(function() { window.location.href = state.redirectUrl; }, 2000);
+                } else if (data.status === 'failed') {
+                    stopUploadPolling(state);
+                    state.btn.disabled = false;
+                    state.status.textContent = 'Failed.';
+                    state.result.innerHTML = '<div class="upload-result-error">&#10007; ' + (data.message || 'Failed') + '</div>';
+                } else {
+                    // Still queued/running — enforce a hard timeout as a backstop.
+                    if (Date.now() - state.startedAt > 45 * 60 * 1000) {
+                        stopUploadPolling(state);
+                        state.btn.disabled = false;
+                        state.status.textContent = 'Timed out.';
+                        state.result.innerHTML = '<div class="upload-result-error">&#10007; Upload timed out after 45 minutes. The job may still be running on the server — check the logs before retrying.</div>';
+                    }
+                }
+            })
+            .catch(function(err) {
+                stopUploadPolling(state);
+                state.btn.disabled = false;
+                state.status.textContent = 'Failed.';
+                state.result.innerHTML = '<div class="upload-result-error">&#10007; ' + ((err && err.message) ? err.message : 'Could not check upload status. Check your connection and the server logs.') + '</div>';
+            });
+    }
+
     // —— SCORM Upload ——
     <?php if ($tab === 'packages'): ?>
     (function() {
@@ -819,39 +878,19 @@ $userRole = $_SESSION['user_role'] ?? '';
                 wrap.classList.add('visible');
                 btn.disabled = true;
 
-                var pollTimer = null;
+                var pollState = {
+                    pollTimer: null,
+                    startedAt: Date.now(),
+                    btn: btn,
+                    fill: fill,
+                    pctEl: pctEl,
+                    status: status,
+                    result: result,
+                    doneMsg: 'Package uploaded',
+                    redirectUrl: '?tab=packages'
+                };
 
-                function pollJob(jobId) {
-                    fetch('<?php echo buildUrl("admin/scorm-upload-status.php"); ?>?job_id=' + jobId, { credentials: 'same-origin' })
-                        .then(function(r) { return r.json(); })
-                        .then(function(data) {
-                            if (!data.ok) {
-                                if (pollTimer) clearInterval(pollTimer);
-                                btn.disabled = false;
-                                status.textContent = 'Failed.';
-                                result.innerHTML = '<div class="upload-result-error">&#10007; ' + (data.error || 'Error') + '</div>';
-                                return;
-                            }
-                            var p = data.progress_pct || 0;
-                            var barPct = 50 + Math.round(p/2);
-                            fill.style.width = barPct + '%';
-                            pctEl.textContent = barPct + '%';
-                            status.textContent = data.message || 'Processing…';
-                            if (data.status === 'done') {
-                                if (pollTimer) clearInterval(pollTimer);
-                                fill.style.width = '100%';
-                                pctEl.textContent = '100%';
-                                status.textContent = 'Complete!';
-                                result.innerHTML = '<div class="upload-result-ok">&#10003; Package uploaded — "' + (data.title || '').replace(/"/g,'"') + '" (' + (data.scorm_version||'?') + ', ' + (data.sco_count||0) + ' SCOs).</div>';
-                                setTimeout(function() { window.location.href = '?tab=packages'; }, 2000);
-                            } else if (data.status === 'failed') {
-                                if (pollTimer) clearInterval(pollTimer);
-                                btn.disabled = false;
-                                status.textContent = 'Failed.';
-                                result.innerHTML = '<div class="upload-result-error">&#10007; ' + (data.message||'Failed') + '</div>';
-                            }
-                        });
-                }
+                function pollJob(jobId) { pollUploadJob(jobId, pollState); }
 
                 var xhr = new XMLHttpRequest();
                 xhr.open('POST', uploadForm.action, true);
@@ -870,7 +909,7 @@ $userRole = $_SESSION['user_role'] ?? '';
                         fill.style.width = '50%';
                         pctEl.textContent = '50%';
                         status.textContent = 'Processing…';
-                        pollTimer = setInterval(function() { pollJob(data.job_id); }, 2000);
+                        pollState.pollTimer = setInterval(function() { pollJob(data.job_id); }, 2000);
                         pollJob(data.job_id);
                     } else {
                         btn.disabled = false;
@@ -1013,7 +1052,7 @@ $userRole = $_SESSION['user_role'] ?? '';
                     fill.style.width = '50%';
                     pctEl.textContent = '50%';
                     status.textContent = 'Processing…';
-                    pollTimer = setInterval(function() { pollJob(data.job_id); }, 2000);
+                    pollState.pollTimer = setInterval(function() { pollJob(data.job_id); }, 2000);
                 } else {
                     btn.disabled = false;
                     status.textContent = 'Failed.';

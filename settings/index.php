@@ -138,8 +138,8 @@ $profileEmail     = htmlspecialchars($user['email'] ?? '', ENT_QUOTES, 'UTF-8');
     <title>Settings | <?php echo getSiteName(); ?></title>
     <link rel="icon" type="image/png" href="<?php echo getFaviconUrl(); ?>">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="<?php echo buildUrl('includes/sidebar.css'); ?>">
-    <link rel="stylesheet" href="<?php echo buildUrl('includes/main.css'); ?>">
+    <link rel="stylesheet" href="<?php echo assetUrl('includes/sidebar.css'); ?>">
+    <link rel="stylesheet" href="<?php echo assetUrl('includes/main.css'); ?>">
     <style>
         body { margin: 0; background-color: var(--bg-body); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; display: flex; min-height: 100vh; }
         main { margin-left: var(--sidebar-width); flex: 1; padding: 48px 64px; width: 100%; transition: 0.3s; }

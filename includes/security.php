@@ -113,7 +113,7 @@ if (!function_exists('applyFailedLogin')) {
     /**
      * Record a failed login against the account and apply the lockout rule.
      *
-     * @return array{locked:bool, remaining_seconds:int, user_id:int}
+     * @return array{locked:bool, remaining_seconds:int, user_id:int, attempts_remaining:int}
      */
     function applyFailedLogin(int $userId, string $email): array
     {
@@ -129,6 +129,7 @@ if (!function_exists('applyFailedLogin')) {
         $now = time();
         $locked = false;
         $remaining = 0;
+        $attemptsRemaining = 0;
 
         if ($userId > 0) {
             $stmt = $pdo->prepare(
@@ -144,7 +145,7 @@ if (!function_exists('applyFailedLogin')) {
 
             // Already locked — do not extend or mutate.
             if ($lockedUntilTs !== false && $lockedUntilTs > $now) {
-                return ['locked' => true, 'remaining_seconds' => $lockedUntilTs - $now, 'user_id' => $userId];
+                return ['locked' => true, 'remaining_seconds' => $lockedUntilTs - $now, 'user_id' => $userId, 'attempts_remaining' => 0];
             }
 
             $count = (int)($row['failed_login_count'] ?? 0);
@@ -164,6 +165,10 @@ if (!function_exists('applyFailedLogin')) {
                 $remaining = $cfg['lock_minutes'] * 60;
                 $count = 0;          // lock is active; counter resets for after expiry
                 $startedAt = null;
+                $attemptsRemaining = 0;
+            } else {
+                // Attempts left before the account locks.
+                $attemptsRemaining = $cfg['max_failures'] - $count;
             }
 
             $pdo->prepare(
@@ -177,7 +182,7 @@ if (!function_exists('applyFailedLogin')) {
             ]);
         }
 
-        return ['locked' => $locked, 'remaining_seconds' => $remaining, 'user_id' => $userId];
+        return ['locked' => $locked, 'remaining_seconds' => $remaining, 'user_id' => $userId, 'attempts_remaining' => $attemptsRemaining];
     }
 }
 

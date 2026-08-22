@@ -139,6 +139,15 @@ define('SCORM_COMPAT_MODE', getenv('SCORM_COMPAT_MODE') ?: '1');
 //   moodle — use the Moodle API bridge only (legacy)
 //   auto   — use native when data exists for the learner, else Moodle (default)
 define('SCORM_BACKEND', getenv('SCORM_BACKEND') ?: 'auto');
+
+// SCORM background processing:
+//   SCORM_BACKGROUND_WORKER='1' spawns admin/scorm-upload-worker.php as a detached
+//   CLI process instead of processing uploads inline. Inline processing relies on
+//   PHP-FPM's fastcgi_finish_request() to return the response promptly; a CLI worker
+//   works regardless. SCORM_PHP_BIN overrides the PHP CLI binary path (defaults to
+//   PHP_BINARY when it is a CLI binary, otherwise common /usr/bin/php paths).
+define('SCORM_BACKGROUND_WORKER', getenv('SCORM_BACKGROUND_WORKER') ?: '0');
+define('SCORM_PHP_BIN', getenv('SCORM_PHP_BIN') ?: '');
 define('S3_BUCKET', getenv('S3_BUCKET') ?: '');
 define('S3_REGION', getenv('S3_REGION') ?: 'us-east-1');
 define('S3_KEY', getenv('S3_KEY') ?: '');
@@ -487,6 +496,22 @@ function buildUrl(string $path = ''): string
 {
     $path = trim($path, '/');
     return rtrim(BASE_URL, '/') . ($path !== '' ? '/' . $path : '');
+}
+
+/**
+ * Cache-busting asset URL. Appends a version query string derived from the
+ * file's modification time, so browsers/proxies (nginx `expires max` + CDN)
+ * re-fetch the asset whenever the file changes. Falls back to the plain
+ * buildUrl() output if the file cannot be resolved.
+ */
+function assetUrl(string $path): string
+{
+    $url = buildUrl($path);
+    $file = realpath(__DIR__ . '/' . ltrim($path, '/'));
+    if ($file !== false && is_file($file)) {
+        $url .= '?v=' . (string)filemtime($file);
+    }
+    return $url;
 }
 
 function redirectTo(string $path): void

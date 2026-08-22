@@ -128,7 +128,19 @@ try {
 } catch (Throwable $_) {}
 
 error_log("[WORKER] Starting job=$jobId pkg=$pkgId tmp=$tmpPath strip='$stripPfx'");
-jobUpdate($jobId, 'running', 'Starting extraction…', 5);
+
+// Atomically claim the job (queued → running). Bail if another worker already took it.
+try {
+    $claim = $pdo->prepare("UPDATE scorm_upload_jobs SET status='running', message='Starting extraction…', progress_pct=5, updated_at=NOW() WHERE id=? AND status='queued'");
+    $claim->execute([$jobId]);
+    if ($claim->rowCount() === 0) {
+        fwrite(STDERR, "[WORKER] Job $jobId already claimed or processed; exiting.\n");
+        exit(0);
+    }
+} catch (Throwable $e) {
+    fwrite(STDERR, "[WORKER] Claim failed for job $jobId: " . $e->getMessage() . "\n");
+    exit(1);
+}
 
 // ── Step 1: Open ZIP ──
 $zip = new ZipArchive();

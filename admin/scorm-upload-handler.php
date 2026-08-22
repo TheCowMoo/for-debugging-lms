@@ -32,6 +32,69 @@ ensureOrganizationsTable();
 ensureScormTables();
 ensureUploadJobsTable();
 
+if (!function_exists('spawnUploadWorker')) {
+    /**
+     * Try to start the SCORM CLI background worker as a detached process.
+     * Returns true only when a worker process was successfully started; returns
+     * false otherwise so the caller can fall back to inline processing.
+     */
+    function spawnUploadWorker(int $jobId, string $tmpPath, int $packageId, string $stripPrefix): bool
+    {
+        if (!function_exists('proc_open')) {
+            error_log('[SCORM] proc_open unavailable — using inline processing');
+            return false;
+        }
+        $worker = __DIR__ . '/scorm-upload-worker.php';
+        if (!is_file($worker)) {
+            error_log('[SCORM] Worker file missing: ' . $worker);
+            return false;
+        }
+
+        // Resolve a usable PHP CLI binary. PHP_BINARY under FPM points at the FPM
+        // binary (not usable for CLI scripts), so allow an explicit override and
+        // fall back to standard CLI locations.
+        $phpBin = SCORM_PHP_BIN !== '' ? SCORM_PHP_BIN : '';
+        if ($phpBin === '' || !is_executable($phpBin)) {
+            $phpBin = '';
+            if (PHP_BINARY !== '' && is_executable(PHP_BINARY)) {
+                $base = strtolower(basename(PHP_BINARY));
+                if (strpos($base, 'fpm') === false) $phpBin = PHP_BINARY;
+            }
+        }
+        if ($phpBin === '') {
+            foreach (['/usr/bin/php', '/usr/bin/php8.3', '/usr/bin/php8.2', '/usr/bin/php8.1', '/usr/bin/php8.0', '/usr/bin/php7.4'] as $cand) {
+                if (is_executable($cand)) { $phpBin = $cand; break; }
+            }
+        }
+        if ($phpBin === '') {
+            error_log('[SCORM] No PHP CLI binary found — using inline processing');
+            return false;
+        }
+
+        $cmd = [
+            $phpBin, $worker,
+            '--job-id=' . $jobId,
+            '--tmp=' . $tmpPath,
+            '--pkg=' . $packageId,
+            '--strip=' . $stripPrefix,
+        ];
+        $descriptors = [
+            0 => ['file', '/dev/null', 'r'],
+            1 => ['file', '/dev/null', 'w'],
+            2 => ['file', '/dev/null', 'w'],
+        ];
+        $pipes = [];
+        $proc = @proc_open($cmd, $descriptors, $pipes, null, null);
+        if (!is_resource($proc)) {
+            error_log('[SCORM] proc_open failed to start worker — using inline processing');
+            return false;
+        }
+        // Fire-and-forget: do NOT proc_close() (it would wait for the child).
+        error_log('[SCORM] Spawned background worker for job=' . $jobId . ' (php=' . $phpBin . ')');
+        return true;
+    }
+}
+
 // Remove time limit for the initial receive phase
 set_time_limit(120);
 if (ini_get('memory_limit') < 512) {
@@ -293,11 +356,21 @@ try {
     set_time_limit(0);
     ignore_user_abort(true);
 
-    $_REQUEST['job_id'] = $jobId;
-    $_REQUEST['token']  = $runToken;
-    $GLOBALS['_SCORM_INLINE'] = true;
-    require __DIR__ . '/scorm-upload-run.php';
-    exit;
+    // Preferred path: a detached CLI worker (enabled via SCORM_BACKGROUND_WORKER=1
+    // in .env). Falls back to inline processing in this process when spawning is
+    // unavailable — inline still works on PHP-FPM where fastcgi_finish_request()
+    // returns the response to the browser before the slow work runs.
+    $spawned = false;
+    if ((defined('SCORM_BACKGROUND_WORKER') ? SCORM_BACKGROUND_WORKER : '0') === '1') {
+        $spawned = spawnUploadWorker($jobId, $persistTmp, $packageId, $stripPrefix);
+    }
+    if (!$spawned) {
+        $_REQUEST['job_id'] = $jobId;
+        $_REQUEST['token']  = $runToken;
+        $GLOBALS['_SCORM_INLINE'] = true;
+        require __DIR__ . '/scorm-upload-run.php';
+        exit;
+    }
 
 
 } catch (Throwable $globalErr) {
